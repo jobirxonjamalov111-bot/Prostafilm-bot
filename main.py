@@ -1,17 +1,12 @@
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+import os
+from aiogram import Bot, Dispatcher
 
-TOKEN = "8981136414:AAE_E6LAP8I8vBscSYsYCAJR8Df60mB-7Gk"
+API_TOKEN = os.getenv("API_TOKEN")
 
-# Ikkala kanal yuzerlarini ro'yxatga olamiz
-KANALLAR = ["@prostafilm", "@kinokorasizmi"]
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
 
-# Ikkala kanalni ham tekshiruvchi funksiya
 async def check_sub(user_id: int) -> bool:
     for kanal in KANALLAR:
         try:
