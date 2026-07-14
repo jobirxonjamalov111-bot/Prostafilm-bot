@@ -57,6 +57,13 @@ def save_user(user_id: int) -> bool:
     return is_new
 
 
+def get_user_count() -> int:
+    conn = sqlite3.connect(DB_PATH)
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    return count
+
+
 def get_all_users() -> list[int]:
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT user_id FROM users").fetchall()
@@ -100,10 +107,11 @@ async def start_command(message: types.Message):
     if is_new and message.from_user.id != ADMIN_ID:
         user = message.from_user
         username = f"@{user.username}" if user.username else "yo'q"
+        total = get_user_count()
         try:
             await bot.send_message(
                 ADMIN_ID,
-                f"🆕 Yangi foydalanuvchi!\n\n"
+                f"🆕 Yangi foydalanuvchi! (#{total})\n\n"
                 f"👤 Ism: {user.full_name}\n"
                 f"🔗 Username: {username}\n"
                 f"🆔 ID: {user.id}"
