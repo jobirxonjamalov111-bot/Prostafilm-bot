@@ -5,17 +5,17 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-# Tokenni Railway'dagi Environment Variables'dan oladi
+# 1. Tokenni Railway'dagi "Variables" qismidan oladi
 API_TOKEN = os.getenv("API_TOKEN")
 
-# Logging xabarlarini yoqamiz
+# 2. Logging
 logging.basicConfig(level=logging.INFO)
 
-# Bot va Dispatcher yaratish
+# 3. Bot va Dispatcher yaratish (Dispatcher'ga bot yozilmaydi!)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher() 
 
-# KANALLAR ro'yxati
+# KANALLAR ro'yxati (o'zgartiring!)
 KANALLAR = ["@sizning_kanal1", "@sizning_kanal2"]
 
 async def check_sub(user_id: int) -> bool:
@@ -44,7 +44,7 @@ def get_main_keyboard():
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    # Rasm linkini shu yerga qo'ying
+    # Rasm linkini o'zingiznikiga almashtiring
     photo_url = "https://telegra.ph/file/..." 
     welcome_text = (
         f"👋 ✨ Salom, {message.from_user.first_name}!\n\n"
