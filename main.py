@@ -49,6 +49,13 @@ def init_db():
             PRIMARY KEY (series_code, episode_number)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS series_info (
+            series_code TEXT PRIMARY KEY,
+            description TEXT,
+            photo_file_id TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -111,6 +118,27 @@ def get_episode_message_id(series_code: str, episode_number: int) -> int | None:
     return row[0] if row else None
 
 
+def save_series_info(series_code: str, description: str, photo_file_id: str | None):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO series_info (series_code, description, photo_file_id) VALUES (?, ?, ?)",
+        (series_code, description, photo_file_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_series_info(series_code: str) -> tuple[str, str] | None:
+    """(description, photo_file_id) qaytaradi, yo'q bo'lsa None."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT description, photo_file_id FROM series_info WHERE series_code = ?",
+        (series_code,)
+    ).fetchone()
+    conn.close()
+    return row if row else None
+
+
 def save_movie(code: str, message_id: int):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -141,7 +169,15 @@ class BroadcastPost(StatesGroup):
 
 class SeriesUpload(StatesGroup):
     waiting_for_code = State()
+    waiting_for_description = State()
+    waiting_for_poster = State()
     waiting_for_episode = State()
+
+
+class EditContent(StatesGroup):
+    waiting_for_code = State()
+    waiting_for_description = State()
+    waiting_for_poster = State()
 
 
 # 0. Start komandasi
@@ -164,7 +200,7 @@ async def start_command(message: types.Message):
         except Exception:
             logging.exception("Adminga xabar yuborishda xato:")
 
-    await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring 👇 (masalan: 123).")
+    await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring 👇 (masalan: 123)")
 
 
 # 0.1. Admin uchun ommaviy xabar (broadcast) yuborish
@@ -215,19 +251,50 @@ async def serial_command(message: types.Message, state: FSMContext):
     await state.set_state(SeriesUpload.waiting_for_code)
 
 
-# 0.4. Serial kodini qabul qilish
+# 0.4. Serial kodini qabul qilish, so'ng tavsifni so'rash
 @dp.message(SeriesUpload.waiting_for_code)
 async def process_series_code(message: types.Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.answer("❌ Iltimos, faqat raqam kiriting!")
         return
 
-    await state.update_data(series_code=message.text, next_episode=1)
+    await state.update_data(series_code=message.text)
+    await message.answer("📝 Serial haqida tavsif yozing (nomi, yili, janri, reytingi va h.k.):")
+    await state.set_state(SeriesUpload.waiting_for_description)
+
+
+# 0.4.1. Tavsifni qabul qilish, so'ng poster (rasm) so'rash
+@dp.message(SeriesUpload.waiting_for_description)
+async def process_series_description(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida tavsif yuboring!")
+        return
+
+    await state.update_data(description=message.text)
+    await message.answer("🖼 Endi serial uchun poster (rasm) yuboring:")
+    await state.set_state(SeriesUpload.waiting_for_poster)
+
+
+# 0.4.2. Poster rasmini qabul qilish, so'ng qismlarni so'rash
+@dp.message(SeriesUpload.waiting_for_poster, F.photo)
+async def process_series_poster(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    photo_file_id = message.photo[-1].file_id  # eng katta o'lchamdagisi
+
+    save_series_info(data["series_code"], data["description"], photo_file_id)
+    await state.update_data(next_episode=1)
+
     await message.answer(
         "🎬 1-qism videosini yuboring.\n"
         "Barcha qismlarni yuklab bo'lgach /done deb yozing."
     )
     await state.set_state(SeriesUpload.waiting_for_episode)
+
+
+# 0.4.3. Poster o'rniga boshqa narsa yuborilsa
+@dp.message(SeriesUpload.waiting_for_poster)
+async def series_poster_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, rasm (poster) yuboring.")
 
 
 # 0.5. Har bir qism videosini qabul qilib, kanalga yuborish
@@ -338,7 +405,7 @@ async def get_movie_handler(message: types.Message):
     episodes = get_episodes(code)
 
     if episodes:
-        # Serial topildi — qismlar tugmalarini ko'rsatamiz
+        # Serial topildi — qismlar tugmalarini tayyorlaymiz
         builder = InlineKeyboardBuilder()
         for episode_number, _ in episodes:
             builder.add(types.InlineKeyboardButton(
@@ -346,10 +413,21 @@ async def get_movie_handler(message: types.Message):
                 callback_data=f"ep:{code}:{episode_number}"
             ))
         builder.adjust(3)
-        await message.answer(
-            f"📺 Serial topildi! Qismni tanlang:",
-            reply_markup=builder.as_markup()
-        )
+
+        info = get_series_info(code)
+        if info:
+            description, photo_file_id = info
+            caption = f"{description}\n\n🔑 Serial kodi: {code}"
+            if photo_file_id:
+                await message.answer_photo(
+                    photo=photo_file_id,
+                    caption=caption,
+                    reply_markup=builder.as_markup()
+                )
+            else:
+                await message.answer(caption, reply_markup=builder.as_markup())
+        else:
+            await message.answer("📺 Serial topildi! Qismni tanlang:", reply_markup=builder.as_markup())
         return
 
     message_id = get_movie(code)
