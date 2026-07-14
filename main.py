@@ -2,13 +2,14 @@ import asyncio
 import os
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 
 # 1. Sozlamalar
-API_TOKEN = os.getenv("API_TOKEN")   # Railway'dagi Variable
-ADMIN_ID = 8003726053                 # O'z Telegram IDingizni yozing (@userinfobot orqali bilib oling)
-CHANNEL_ID = -1003988674227           # Kino turadigan yopiq kanal IDsi (bot shu kanalda ADMIN bo'lishi shart)
+API_TOKEN = os.getenv("API_TOKEN")
+ADMIN_ID = 8003726053          # O'z IDingizni yozing
+CHANNEL_ID = -1003988674227    # Kanal IDsi (bot shu yerda ADMIN bo'lishi shart)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,69 +17,75 @@ logging.basicConfig(
 )
 
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
+
+# ESLATMA: bu oddiy xotiradagi lug'at — bot qayta ishga tushganda (Railway restart
+# qilganda) bu ma'lumot O'CHIB KETADI. Haqiqiy loyihada SQLite/PostgreSQL kerak.
+MOVIES_DB: dict[str, int] = {}   # {"123": message_id}
 
 
-# 2. Asosiy tugmalar
-def get_main_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="Kino qidirish 🔍"))
-    return builder.as_markup(resize_keyboard=True)
+class UploadMovie(StatesGroup):
+    waiting_for_code = State()
 
 
-# 3. Start komandasi
-@dp.message(Command("start"))
-async def start_command(message: types.Message):
-    await message.answer("Xush kelibsiz! Kino kodini yuboring.", reply_markup=get_main_keyboard())
-
-
-# 4. "Kino qidirish" tugmasi bosilganda
-@dp.message(F.text == "Kino qidirish 🔍")
-async def ask_movie_code(message: types.Message):
-    await message.answer("🔢 Kino kodini kiriting:")
-
-
-# 5. Admin uchun kino yuklash (Botga yuborsangiz kanalga tashlaydi)
+# 2. Videoni qabul qilish (faqat admin)
 @dp.message(F.video)
-async def upload_movie(message: types.Message):
+async def start_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("Siz admin emassiz!")
+        return  # admin bo'lmasa, e'tiborsiz qoldiramiz
+
+    await state.update_data(video_file_id=message.video.file_id)
+    await message.answer("✅ Video qabul qilindi. Endi kino uchun kod yozing (masalan: 123):")
+    await state.set_state(UploadMovie.waiting_for_code)
+
+
+# 3. Kodni qabul qilish, kanalga yuborish va bazaga yozish
+@dp.message(UploadMovie.waiting_for_code)
+async def process_code(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqam kiriting!")
         return
+
+    data = await state.get_data()
+    video_id = data.get("video_file_id")
 
     try:
         sent_msg = await bot.send_video(
             chat_id=CHANNEL_ID,
-            video=message.video.file_id,
-            caption=message.caption
+            video=video_id,
+            caption=f"Kino kodi: {message.text}"
         )
-        await message.answer(f"✅ Kino saqlandi! Kodi: {sent_msg.message_id}")
+        # Kod bilan kanal xabarini bog'laymiz
+        MOVIES_DB[message.text] = sent_msg.message_id
+        await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {message.text}")
     except Exception as e:
         logging.exception("Kanalga video yuborishda xato:")
-        await message.answer(f"⚠️ Kanalga yuborib bo'lmadi: {e}")
+        await message.answer(f"⚠️ Xatolik: {e}")
+    finally:
+        await state.clear()
 
 
-# 6. Kino qidirish (Kanal IDsi orqali)
+# 4. Kino qidirish (Foydalanuvchi uchun)
 @dp.message(F.text.isdigit())
 async def get_movie(message: types.Message):
+    message_id = MOVIES_DB.get(message.text)
+
+    if not message_id:
+        await message.answer("❌ Bunday kodli kino topilmadi!")
+        return
+
     try:
         await bot.copy_message(
             chat_id=message.chat.id,
             from_chat_id=CHANNEL_ID,
-            message_id=int(message.text)
+            message_id=message_id
         )
     except Exception as e:
-        logging.error(f"Kino topilmadi (kod: {message.text}): {e}")
-        await message.answer("❌ Kino topilmadi yoki kod noto'g'ri!")
-
-
-# 7. Tushunarsiz xabarlar uchun
-@dp.message()
-async def fallback_handler(message: types.Message):
-    await message.answer("❗ Iltimos, kino kodini raqam bilan yuboring yoki menyudan foydalaning.")
+        logging.exception("Kino yuborishda xato:")
+        await message.answer("❌ Kinoni yuborib bo'lmadi, keyinroq urinib ko'ring.")
 
 
 async def main():
-    # Eski webhook/polling to'qnashuvining oldini olish
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Bot ishga tushdi...")
     await dp.start_polling(bot)
