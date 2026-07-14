@@ -27,6 +27,7 @@ MOVIES_DB: dict[str, int] = {}   # {"123": message_id}
 
 class UploadMovie(StatesGroup):
     waiting_for_code = State()
+    waiting_for_description = State()
 
 
 # 0. Start komandasi
@@ -46,25 +47,41 @@ async def start_upload(message: types.Message, state: FSMContext):
     await state.set_state(UploadMovie.waiting_for_code)
 
 
-# 3. Kodni qabul qilish, kanalga yuborish va bazaga yozish
+# 3. Kodni qabul qilish, so'ng tavsifni so'rash
 @dp.message(UploadMovie.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
         await message.answer("❌ Iltimos, faqat raqam kiriting!")
         return
 
+    await state.update_data(code=message.text)
+    await message.answer("📝 Endi kino haqida tavsif yozing (nomi, yili, janri va h.k.):")
+    await state.set_state(UploadMovie.waiting_for_description)
+
+
+# 3.1. Tavsifni qabul qilish, kanalga yuborish va bazaga yozish
+@dp.message(UploadMovie.waiting_for_description)
+async def process_description(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida tavsif yuboring!")
+        return
+
     data = await state.get_data()
     video_id = data.get("video_file_id")
+    code = data.get("code")
+    tavsif = message.text
+
+    caption = f"🎬 {tavsif}\n\n🔑 Kino kodi: {code}"
 
     try:
         sent_msg = await bot.send_video(
             chat_id=CHANNEL_ID,
             video=video_id,
-            caption=f"Kino kodi: {message.text}"
+            caption=caption
         )
         # Kod bilan kanal xabarini bog'laymiz
-        MOVIES_DB[message.text] = sent_msg.message_id
-        await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {message.text}")
+        MOVIES_DB[code] = sent_msg.message_id
+        await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
     except Exception as e:
         logging.exception("Kanalga video yuborishda xato:")
         await message.answer(f"⚠️ Xatolik: {e}")
