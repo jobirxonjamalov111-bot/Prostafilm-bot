@@ -68,7 +68,7 @@ async def check_callback(call: types.CallbackQuery):
     is_subscribed = await check_sub(call.from_user.id)
     if is_subscribed:
         await call.message.delete()
-        await call.message.answer("🎉 Rahmat! Obuna tekshirildi.", reply_markup=get_main_keyboard())
+        await call.message.answer("🎉 Rahmat!! Obuna tekshirildi.", reply_markup=get_main_keyboard())
     else:
         await call.answer("❌ Siz hali hamma kanalga a'zo bo'lmadingiz!", show_alert=True)
 
