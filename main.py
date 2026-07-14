@@ -1,6 +1,7 @@
 import asyncio
 import os
 import logging
+import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -12,6 +13,10 @@ API_TOKEN = os.getenv("API_TOKEN")
 ADMIN_ID = 8003726053          # O'z IDingizni yozing
 CHANNEL_ID = -1003988674227    # Kanal IDsi (bot shu yerda ADMIN bo'lishi shart)
 
+# Baza fayli — Railway'da bu Volume ulangan papkada bo'lishi SHART, aks holda
+# qayta deployda baza yana o'chib ketadi (pastdagi izohni o'qing)
+DB_PATH = os.getenv("DB_PATH", "/data/movies.db")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -20,9 +25,37 @@ logging.basicConfig(
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ESLATMA: bu oddiy xotiradagi lug'at — bot qayta ishga tushganda (Railway restart
-# qilganda) bu ma'lumot O'CHIB KETADI. Haqiqiy loyihada SQLite/PostgreSQL kerak.
-MOVIES_DB: dict[str, int] = {}   # {"123": message_id}
+
+def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS movies (
+            code TEXT PRIMARY KEY,
+            message_id INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def save_movie(code: str, message_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO movies (code, message_id) VALUES (?, ?)",
+        (code, message_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_movie(code: str) -> int | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT message_id FROM movies WHERE code = ?", (code,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 class UploadMovie(StatesGroup):
@@ -33,7 +66,7 @@ class UploadMovie(StatesGroup):
 # 0. Start komandasi
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring👇 (masalan: 123).")
+    await message.answer("Xush kelibsiz! Kino kodini yuboring (masalan: 123).")
 
 
 # 2. Videoni qabul qilish (faqat admin)
@@ -79,8 +112,8 @@ async def process_description(message: types.Message, state: FSMContext):
             video=video_id,
             caption=caption
         )
-        # Kod bilan kanal xabarini bog'laymiz
-        MOVIES_DB[code] = sent_msg.message_id
+        # Kod bilan kanal xabarini bog'laymiz (SQLite bazaga yozamiz)
+        save_movie(code, sent_msg.message_id)
         await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
     except Exception as e:
         logging.exception("Kanalga video yuborishda xato:")
@@ -91,11 +124,11 @@ async def process_description(message: types.Message, state: FSMContext):
 
 # 4. Kino qidirish (Foydalanuvchi uchun)
 @dp.message(F.text.isdigit())
-async def get_movie(message: types.Message):
-    message_id = MOVIES_DB.get(message.text)
+async def get_movie_handler(message: types.Message):
+    message_id = get_movie(message.text)
 
     if not message_id:
-        await message.answer("kechirasiz Bunday kodli kino topilmadi!❌boshqa kod kiriting")
+        await message.answer("❌ Bunday kodli kino topilmadi!")
         return
 
     try:
@@ -116,6 +149,7 @@ async def fallback_handler(message: types.Message):
 
 
 async def main():
+    init_db()
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Bot ishga tushdi...")
     await dp.start_polling(bot)
