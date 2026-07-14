@@ -1,23 +1,30 @@
+import asyncio
 import os
-from aiogram import Bot, Dispatcher
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+# Tokenni Railway'dagi Environment Variables'dan oladi
 API_TOKEN = os.getenv("API_TOKEN")
 
+# Bot va Dispatcher obyektlarini yaratish
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher() # O'zgarish shu yerda: qavs ichi bo'sh bo'ladi
 
+# KANALAR ro'yxati (bu o'zgaruvchini kodning boshida e'lon qiling)
+KANALLAR = ["@sizning_kanal1", "@sizning_kanal2"]
 
 async def check_sub(user_id: int) -> bool:
     for kanal in KANALLAR:
         try:
             member = await bot.get_chat_member(chat_id=kanal, user_id=user_id)
             if member.status not in ["member", "administrator", "creator"]:
-                return False # Agar birortasiga a'zo bo'lmasa, False qaytaradi
+                return False 
         except Exception:
             continue
-    return True # Hammasiga a'zo bo'lsa True qaytaradi
+    return True 
 
-# Obuna bo'lish uchun inline tugmalar
 def get_sub_keyboard():
     builder = InlineKeyboardBuilder()
     for kanal in KANALLAR:
@@ -26,7 +33,6 @@ def get_sub_keyboard():
     builder.adjust(1)
     return builder.as_markup()
 
-# Asosiy menyu
 def get_main_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.add(types.KeyboardButton(text="Kino qidirish 🔍"))
@@ -39,7 +45,7 @@ async def start_command(message: types.Message):
     
     if not is_subscribed:
         await message.answer(
-            "Assalomu alekum! Botdan foydalanish uchun barcha homiy kanallarimizga a'zo bo'lishingiz majburiy!**\n\n"
+            "Assalomu alekum! Botdan foydalanish uchun barcha homiy kanallarimizga a'zo bo'lishingiz majburiy!\n\n"
             "Iltimos, pastdagi kanallarga a'zo bo'lib, keyin 'Tekshirish' tugmasini bosing.",
             reply_markup=get_sub_keyboard()
         )
