@@ -20,7 +20,7 @@ dp = Dispatcher()
 
 # KANALLAR ro'yxati — O'ZINGIZNIKIGA ALMASHTIRING!
 # Bot bu kanallarga ADMIN qilib qo'shilgan bo'lishi shart, aks holda tekshiruv ishlamaydi
-KANALLAR = ["@sizning_kanal1", "@sizning_kanal2"]
+KANALLAR = ["@kinokorasizmi", "@prostafilmbot"]
 
 # Salomlashuv rasmi — O'ZINGIZNIKIGA ALMASHTIRING (haqiqiy to'liq URL bo'lishi kerak)
 # Agar rasm kerak bo'lmasa, PHOTO_URL = None qoldiring
