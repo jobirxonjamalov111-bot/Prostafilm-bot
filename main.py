@@ -14,7 +14,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Baza fayli — Railway'da bu Volume ulangan papkada bo'lishi SHART, aks holda
-# qayta deployda baza yana o'chib ketadi (pastdagi izohni o'qing)
+# qayta deployda baza yana o'chib ketadi
 DB_PATH = os.getenv("DB_PATH", "/data/movies.db")
 
 logging.basicConfig(
@@ -35,8 +35,33 @@ def init_db():
             message_id INTEGER NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
     conn.commit()
     conn.close()
+
+
+def save_user(user_id: int) -> bool:
+    """Foydalanuvchini bazaga qo'shadi. Agar u YANGI bo'lsa True qaytaradi."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
+        (user_id,)
+    )
+    conn.commit()
+    is_new = cursor.rowcount > 0
+    conn.close()
+    return is_new
+
+
+def get_all_users() -> list[int]:
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT user_id FROM users").fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 
 def save_movie(code: str, message_id: int):
@@ -63,13 +88,71 @@ class UploadMovie(StatesGroup):
     waiting_for_description = State()
 
 
+class BroadcastPost(StatesGroup):
+    waiting_for_content = State()
+
+
 # 0. Start komandasi
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring 👇(masalan: 123).")
+    is_new = save_user(message.from_user.id)
+
+    if is_new and message.from_user.id != ADMIN_ID:
+        user = message.from_user
+        username = f"@{user.username}" if user.username else "yo'q"
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"🆕 Yangi foydalanuvchi!\n\n"
+                f"👤 Ism: {user.full_name}\n"
+                f"🔗 Username: {username}\n"
+                f"🆔 ID: {user.id}"
+            )
+        except Exception:
+            logging.exception("Adminga xabar yuborishda xato:")
+
+    await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring 👇 (masalan: 123).")
 
 
-# 2. Videoni qabul qilish (faqat admin)
+# 0.1. Admin uchun ommaviy xabar (broadcast) yuborish
+@dp.message(Command("post"))
+async def post_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer(
+        "📢 Yubormoqchi bo'lgan xabaringizni yuboring "
+        "(matn, rasm, video — qanday bo'lsa shunday ko'rinishda ketadi):"
+    )
+    await state.set_state(BroadcastPost.waiting_for_content)
+
+
+# 0.2. Xabarni qabul qilib, hammaga tarqatish
+@dp.message(BroadcastPost.waiting_for_content)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    users = get_all_users()
+    await state.clear()
+
+    await message.answer(f"⏳ {len(users)} ta foydalanuvchiga yuborilmoqda...")
+
+    success = 0
+    failed = 0
+    for user_id in users:
+        try:
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+            success += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)  # Telegram limitiga tegib ketmaslik uchun
+
+    await message.answer(f"✅ Yuborildi: {success} ta\n❌ Yuborilmadi: {failed} ta")
+
+
+# 1. Videoni qabul qilish (faqat admin)
 @dp.message(F.video)
 async def start_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -80,7 +163,7 @@ async def start_upload(message: types.Message, state: FSMContext):
     await state.set_state(UploadMovie.waiting_for_code)
 
 
-# 3. Kodni qabul qilish, so'ng tavsifni so'rash
+# 2. Kodni qabul qilish, so'ng tavsifni so'rash
 @dp.message(UploadMovie.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
     if not message.text or not message.text.isdigit():
@@ -92,7 +175,7 @@ async def process_code(message: types.Message, state: FSMContext):
     await state.set_state(UploadMovie.waiting_for_description)
 
 
-# 3.1. Tavsifni qabul qilish, kanalga yuborish va bazaga yozish
+# 3. Tavsifni qabul qilish, kanalga yuborish va bazaga yozish
 @dp.message(UploadMovie.waiting_for_description)
 async def process_description(message: types.Message, state: FSMContext):
     if not message.text:
@@ -112,17 +195,16 @@ async def process_description(message: types.Message, state: FSMContext):
             video=video_id,
             caption=caption
         )
-        # Kod bilan kanal xabarini bog'laymiz (SQLite bazaga yozamiz)
         save_movie(code, sent_msg.message_id)
         await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
-    except Exception as e:
+    except Exception:
         logging.exception("Kanalga video yuborishda xato:")
         await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
     finally:
         await state.clear()
 
 
-# 4. Kino qidirish (Foydalanuvchi uchun)
+# 4. Kino qidirish (foydalanuvchi uchun)
 @dp.message(F.text.isdigit())
 async def get_movie_handler(message: types.Message):
     message_id = get_movie(message.text)
@@ -137,7 +219,7 @@ async def get_movie_handler(message: types.Message):
             from_chat_id=CHANNEL_ID,
             message_id=message_id
         )
-    except Exception as e:
+    except Exception:
         logging.exception("Kino yuborishda xato:")
         await message.answer("❌ Kinoni yuborib bo'lmadi, keyinroq urinib ko'ring.")
 
