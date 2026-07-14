@@ -44,7 +44,8 @@ def get_main_keyboard():
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    photo_url = "https://telegra.ph/file/..." # Rasm linkini shu yerga qo'ying
+    # Rasm linkini shu yerga qo'ying
+    photo_url = "https://telegra.ph/file/..." 
     welcome_text = (
         f"👋 ✨ Salom, {message.from_user.first_name}!\n\n"
         "🎬 Prosta Film botimizga xush kelibsiz!\n\n"
