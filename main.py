@@ -8,11 +8,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 # Tokenni Railway'dagi Environment Variables'dan oladi
 API_TOKEN = os.getenv("API_TOKEN")
 
-# Bot va Dispatcher obyektlarini yaratish
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher() # O'zgarish shu yerda: qavs ichi bo'sh bo'ladi
+dp = Dispatcher()
 
-# KANALAR ro'yxati (bu o'zgaruvchini kodning boshida e'lon qiling)
+# KANALAR ro'yxati (buni o'zingiznikiga moslab o'zgartiring)
 KANALLAR = ["@sizning_kanal1", "@sizning_kanal2"]
 
 async def check_sub(user_id: int) -> bool:
@@ -20,10 +19,10 @@ async def check_sub(user_id: int) -> bool:
         try:
             member = await bot.get_chat_member(chat_id=kanal, user_id=user_id)
             if member.status not in ["member", "administrator", "creator"]:
-                return False 
+                return False
         except Exception:
             continue
-    return True 
+    return True
 
 def get_sub_keyboard():
     builder = InlineKeyboardBuilder()
@@ -41,45 +40,49 @@ def get_main_keyboard():
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
+    # Rasm linkini shu yerga qo'ying (to'g'ri link bo'lishi shart!)
+    photo_url = "https://telegra.ph/file/..." 
+    welcome_text = (
+        f"👋 ✨ Salom, {message.from_user.first_name}!\n\n"
+        "🎬 Prosta Film botimizga xush kelibsiz!\n\n"
+        "👇 Istalgan kino kodini kiriting. Masalan: 33"
+    )
+    
     is_subscribed = await check_sub(message.from_user.id)
     
     if not is_subscribed:
         await message.answer(
-            "Assalomu alekum! Botdan foydalanish uchun barcha homiy kanallarimizga a'zo bo'lishingiz majburiy!\n\n"
-            "Iltimos, pastdagi kanallarga a'zo bo'lib, keyin 'Tekshirish  tugmasini bosing.",
+            "Assalomu alekum! Botdan foydalanish uchun barcha kanallarimizga a'zo bo'ling!",
             reply_markup=get_sub_keyboard()
         )
     else:
-        await message.answer(
-            f"👋 ✨ Salom, {message.from_user.first_name}!\n\n🎬 Prosta Film botimizga xush kelibsiz! Film kodini yuboring ",
+        # Rasm bilan kutib olish
+        await message.answer_photo(
+            photo=photo_url, 
+            caption=welcome_text, 
             reply_markup=get_main_keyboard()
         )
 
 @dp.callback_query(lambda call: call.data == "check_subscription")
 async def check_callback(call: types.CallbackQuery):
     is_subscribed = await check_sub(call.from_user.id)
-    
     if is_subscribed:
         await call.message.delete()
-        await call.message.answer(
-            "🎉 Rahmat! Obuna muvaffaqiyatli tekshirildi. Endi botdan foydalanishingiz mumkin!",
-            reply_markup=get_main_keyboard()
-        )
+        await call.message.answer("🎉 Rahmat! Obuna tekshirildi.", reply_markup=get_main_keyboard())
     else:
-        await call.answer("❌ Siz hali hamma kanalga a'zo bo'lmadingiz! hammasiga obuna bolib qaytauruning", show_alert=True)
+        await call.answer("❌ Siz hali hamma kanalga a'zo bo'lmadingiz!", show_alert=True)
 
 @dp.message(lambda message: message.text == "Kino qidirish 🔍")
 async def search_movie(message: types.Message):
     if not await check_sub(message.from_user.id):
-        return await message.answer("❌ Botdan foydalanish uchun avval barcha kanallarga a'zo bo'ling!", reply_markup=get_sub_keyboard())
-    await message.answer("🔢 **Kino kodini kiriting:**")
+        return await message.answer("❌ Avval kanallarga a'zo bo'ling!", reply_markup=get_sub_keyboard())
+    await message.answer("🔢 Kino kodini kiriting:")
 
 @dp.message(lambda message: message.text == "Yordam ❓")
 async def help_command(message: types.Message):
-    await message.answer("🆘 Yordam bo‘limi: Adminga yozing: @Tezrideadmin")
+    await message.answer("🆘 Adminga yozing: @Tezrideadmin")
 
 async def main():
-    print("Bot muvaffaqiyatli ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
