@@ -8,10 +8,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# 1. Sozlamalar
+# 1. Sozlamalar — hammasi Railway Variables'dan olinadi, kodda hech narsa ochiq yozilmagan
 API_TOKEN = os.getenv("API_TOKEN")
-ADMIN_ID = 8003726053          # O'z IDingizni yozing
-CHANNEL_ID = -1003988674227    # Kanal IDsi (bot shu yerda ADMIN bo'lishi shart)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Baza fayli — Railway'da bu Volume ulangan papkada bo'lishi SHART, aks holda
 # qayta deployda baza yana o'chib ketadi (pastdagi izohni o'qing)
@@ -117,7 +117,7 @@ async def process_description(message: types.Message, state: FSMContext):
         await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
     except Exception as e:
         logging.exception("Kanalga video yuborishda xato:")
-        await message.answer(f"⚠️ Xatolik: {e}")
+        await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
     finally:
         await state.clear()
 
