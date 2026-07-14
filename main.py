@@ -33,7 +33,7 @@ class UploadMovie(StatesGroup):
 # 0. Start komandasi
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    await message.answer("Xush kelibsiz! Kino kodini yuboring (masalan: 123).")
+    await message.answer("Assalomu alekum Prosta |film  , botimizga Xush kelibsiz! Kino kodini yuboring (masalan: 123).")
 
 
 # 2. Videoni qabul qilish (faqat admin)
@@ -95,7 +95,7 @@ async def get_movie(message: types.Message):
     message_id = MOVIES_DB.get(message.text)
 
     if not message_id:
-        await message.answer("❌ Bunday kodli kino topilmadi!")
+        await message.answer("kechirasiz Bunday kodli kino topilmadi!❌boshqa kod kiriting")
         return
 
     try:
