@@ -20,7 +20,7 @@ dp = Dispatcher()
 
 # KANALLAR ro'yxati — O'ZINGIZNIKIGA ALMASHTIRING!
 # Bot bu kanallarga ADMIN qilib qo'shilgan bo'lishi shart, aks holda tekshiruv ishlamaydi
-KANALLAR = ["@kinokorasizmi", "@prostafilmbot"]
+KANALLAR = ["@sizning_kanal1", "@sizning_kanal2"]
 
 # Salomlashuv rasmi — O'ZINGIZNIKIGA ALMASHTIRING (haqiqiy to'liq URL bo'lishi kerak)
 # Agar rasm kerak bo'lmasa, PHOTO_URL = None qoldiring
@@ -43,9 +43,9 @@ async def check_sub(user_id: int) -> bool:
 
 def get_sub_keyboard():
     builder = InlineKeyboardBuilder()
-    for kanal in KANALLAR:
+    for i, kanal in enumerate(KANALLAR, start=1):
         builder.add(types.InlineKeyboardButton(
-            text=f"Kanalga o'tish: {kanal}",
+            text=f"{i}-kanal",
             url=f"https://t.me/{kanal.replace('@', '')}"
         ))
     builder.add(types.InlineKeyboardButton(text="Tekshirish ✅", callback_data="check_subscription"))
