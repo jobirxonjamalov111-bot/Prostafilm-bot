@@ -8,7 +8,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 # 1. Sozlamalar
 API_TOKEN = os.getenv("API_TOKEN")   # Railway'dagi Variable
 ADMIN_ID = 8003726053                 # O'z Telegram IDingizni yozing (@userinfobot orqali bilib oling)
-CHANNEL_ID = -1004335196627           # Kino turadigan yopiq kanal IDsi (bot shu kanalda ADMIN bo'lishi shart)
+CHANNEL_ID = -1003988674227           # Kino turadigan yopiq kanal IDsi (bot shu kanalda ADMIN bo'lishi shart)
 
 logging.basicConfig(
     level=logging.INFO,
