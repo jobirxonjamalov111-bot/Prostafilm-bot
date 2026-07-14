@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # 1. Sozlamalar — hammasi Railway Variables'dan olinadi, kodda hech narsa ochiq yozilmagan
 API_TOKEN = os.getenv("API_TOKEN")
@@ -40,6 +41,14 @@ def init_db():
             user_id INTEGER PRIMARY KEY
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS episodes (
+            series_code TEXT NOT NULL,
+            episode_number INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            PRIMARY KEY (series_code, episode_number)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -71,6 +80,37 @@ def get_all_users() -> list[int]:
     return [row[0] for row in rows]
 
 
+def save_episode(series_code: str, episode_number: int, message_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO episodes (series_code, episode_number, message_id) VALUES (?, ?, ?)",
+        (series_code, episode_number, message_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_episodes(series_code: str) -> list[tuple[int, int]]:
+    """[(episode_number, message_id), ...] tartiblangan holda qaytaradi."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT episode_number, message_id FROM episodes WHERE series_code = ? ORDER BY episode_number",
+        (series_code,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_episode_message_id(series_code: str, episode_number: int) -> int | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT message_id FROM episodes WHERE series_code = ? AND episode_number = ?",
+        (series_code, episode_number)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
 def save_movie(code: str, message_id: int):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -97,6 +137,11 @@ class UploadMovie(StatesGroup):
 
 class BroadcastPost(StatesGroup):
     waiting_for_content = State()
+
+
+class SeriesUpload(StatesGroup):
+    waiting_for_code = State()
+    waiting_for_episode = State()
 
 
 # 0. Start komandasi
@@ -160,6 +205,80 @@ async def process_broadcast(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Yuborildi: {success} ta\n❌ Yuborilmadi: {failed} ta")
 
 
+# 0.3. Serial yuklashni boshlash (faqat admin)
+@dp.message(Command("serial"))
+async def serial_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer("🎞 Serial uchun kod kiriting (masalan: 77):")
+    await state.set_state(SeriesUpload.waiting_for_code)
+
+
+# 0.4. Serial kodini qabul qilish
+@dp.message(SeriesUpload.waiting_for_code)
+async def process_series_code(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqam kiriting!")
+        return
+
+    await state.update_data(series_code=message.text, next_episode=1)
+    await message.answer(
+        "🎬 1-qism videosini yuboring.\n"
+        "Barcha qismlarni yuklab bo'lgach /done deb yozing."
+    )
+    await state.set_state(SeriesUpload.waiting_for_episode)
+
+
+# 0.5. Har bir qism videosini qabul qilib, kanalga yuborish
+@dp.message(SeriesUpload.waiting_for_episode, F.video)
+async def process_series_episode(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    series_code = data.get("series_code")
+    episode_number = data.get("next_episode", 1)
+
+    try:
+        sent_msg = await bot.send_video(
+            chat_id=CHANNEL_ID,
+            video=message.video.file_id,
+            caption=f"🎬 Serial kodi: {series_code}\n📺 {episode_number}-qism"
+        )
+        save_episode(series_code, episode_number, sent_msg.message_id)
+        await message.answer(
+            f"✅ {episode_number}-qism saqlandi!\n"
+            f"Keyingi qismni yuboring yoki tugatish uchun /done yozing."
+        )
+        await state.update_data(next_episode=episode_number + 1)
+    except Exception:
+        logging.exception("Serial qismini kanalga yuborishda xato:")
+        await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
+
+
+# 0.6. Serial yuklashni tugatish
+@dp.message(Command("done"), SeriesUpload.waiting_for_episode)
+async def finish_series(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    series_code = data.get("series_code")
+    total_episodes = data.get("next_episode", 1) - 1
+    await state.clear()
+
+    if total_episodes == 0:
+        await message.answer("❌ Hech qanday qism yuklanmadi, serial saqlanmadi.")
+        return
+
+    await message.answer(
+        f"🎉 Serial saqlandi!\n"
+        f"🔑 Kodi: {series_code}\n"
+        f"📺 Jami qismlar: {total_episodes} ta"
+    )
+
+
+# 0.7. Serial holatida video yoki /done bo'lmagan xabarlar uchun
+@dp.message(SeriesUpload.waiting_for_episode)
+async def series_wrong_content(message: types.Message):
+    await message.answer("❗ Iltimos, video yuboring yoki tugatish uchun /done yozing.")
+
+
 # 1. Videoni qabul qilish (faqat admin)
 @dp.message(F.video)
 async def start_upload(message: types.Message, state: FSMContext):
@@ -212,11 +331,28 @@ async def process_description(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-# 4. Kino qidirish (foydalanuvchi uchun)
+# 4. Kino/serial qidirish (foydalanuvchi uchun)
 @dp.message(F.text.isdigit())
 async def get_movie_handler(message: types.Message):
-    message_id = get_movie(message.text)
+    code = message.text
+    episodes = get_episodes(code)
 
+    if episodes:
+        # Serial topildi — qismlar tugmalarini ko'rsatamiz
+        builder = InlineKeyboardBuilder()
+        for episode_number, _ in episodes:
+            builder.add(types.InlineKeyboardButton(
+                text=f"{episode_number}-qism",
+                callback_data=f"ep:{code}:{episode_number}"
+            ))
+        builder.adjust(3)
+        await message.answer(
+            f"📺 Serial topildi! Qismni tanlang:",
+            reply_markup=builder.as_markup()
+        )
+        return
+
+    message_id = get_movie(code)
     if not message_id:
         await message.answer("❌ Bunday kodli kino topilmadi!")
         return
@@ -230,6 +366,33 @@ async def get_movie_handler(message: types.Message):
     except Exception:
         logging.exception("Kino yuborishda xato:")
         await message.answer("❌ Kinoni yuborib bo'lmadi, keyinroq urinib ko'ring.")
+
+
+# 4.1. Serial qismini tanlaganda yuborish
+@dp.callback_query(F.data.startswith("ep:"))
+async def send_episode(callback: types.CallbackQuery):
+    try:
+        _, series_code, episode_number = callback.data.split(":")
+        episode_number = int(episode_number)
+    except ValueError:
+        await callback.answer("❌ Xato ma'lumot.", show_alert=True)
+        return
+
+    message_id = get_episode_message_id(series_code, episode_number)
+    if not message_id:
+        await callback.answer("❌ Bu qism topilmadi.", show_alert=True)
+        return
+
+    try:
+        await bot.copy_message(
+            chat_id=callback.message.chat.id,
+            from_chat_id=CHANNEL_ID,
+            message_id=message_id
+        )
+        await callback.answer()
+    except Exception:
+        logging.exception("Serial qismini yuborishda xato:")
+        await callback.answer("❌ Yuborib bo'lmadi, keyinroq urinib ko'ring.", show_alert=True)
 
 
 # 5. Boshqa hech qaysi handlerga mos kelmagan xabarlar uchun
