@@ -46,12 +46,12 @@ async def start_command(message: types.Message):
     if not is_subscribed:
         await message.answer(
             "Assalomu alekum! Botdan foydalanish uchun barcha homiy kanallarimizga a'zo bo'lishingiz majburiy!\n\n"
-            "Iltimos, pastdagi kanallarga a'zo bo'lib, keyin 'Tekshirish' tugmasini bosing.",
+            "Iltimos, pastdagi kanallarga a'zo bo'lib, keyin 'Tekshirish  tugmasini bosing.",
             reply_markup=get_sub_keyboard()
         )
     else:
         await message.answer(
-            f"👋 ✨ Salom, {message.from_user.first_name}!\n\n🎬 Prosta Film botimizga xush kelibsiz!",
+            f"👋 ✨ Salom, {message.from_user.first_name}!\n\n🎬 Prosta Film botimizga xush kelibsiz! Film kodini yuboring ",
             reply_markup=get_main_keyboard()
         )
 
@@ -66,7 +66,7 @@ async def check_callback(call: types.CallbackQuery):
             reply_markup=get_main_keyboard()
         )
     else:
-        await call.answer("❌ Siz hali hamma kanalga a'zo bo'lmadingiz!", show_alert=True)
+        await call.answer("❌ Siz hali hamma kanalga a'zo bo'lmadingiz! hammasiga obuna bolib qaytauruning", show_alert=True)
 
 @dp.message(lambda message: message.text == "Kino qidirish 🔍")
 async def search_movie(message: types.Message):
