@@ -346,6 +346,104 @@ async def series_wrong_content(message: types.Message):
     await message.answer("❗ Iltimos, video yuboring yoki tugatish uchun /done yozing.")
 
 
+# 0.8. Mavjud kino/serialni tahrirlashni boshlash (faqat admin)
+@dp.message(Command("edit"))
+async def edit_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer("✏️ Tahrirlamoqchi bo'lgan kino yoki serial kodini kiriting:")
+    await state.set_state(EditContent.waiting_for_code)
+
+
+# 0.9. Kodni tekshirish — kino yoki serial ekanini aniqlash
+@dp.message(EditContent.waiting_for_code)
+async def process_edit_code(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqam kiriting!")
+        return
+
+    code = message.text
+
+    if get_movie(code) is not None:
+        await state.update_data(code=code, content_type="movie")
+        await message.answer("📝 Yangi tavsif matnini yuboring:")
+        await state.set_state(EditContent.waiting_for_description)
+    elif get_series_info(code) is not None:
+        await state.update_data(code=code, content_type="series")
+        await message.answer("📝 Yangi tavsif matnini yuboring:")
+        await state.set_state(EditContent.waiting_for_description)
+    else:
+        await message.answer("❌ Bunday kodli kino yoki serial topilmadi!")
+        await state.clear()
+
+
+# 0.10. Yangi tavsifni qabul qilish
+@dp.message(EditContent.waiting_for_description)
+async def process_edit_description(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida tavsif yuboring!")
+        return
+
+    data = await state.get_data()
+    code = data["code"]
+    content_type = data["content_type"]
+
+    if content_type == "movie":
+        # Kanaldagi video xabarining caption'ini to'g'ridan-to'g'ri yangilaymiz
+        new_caption = f"🎬 {message.text}\n\n🔑 Kino kodi: {code}"
+        message_id = get_movie(code)
+        try:
+            await bot.edit_message_caption(
+                chat_id=CHANNEL_ID,
+                message_id=message_id,
+                caption=new_caption
+            )
+            await message.answer("✅ Tavsif muvaffaqiyatli yangilandi!")
+        except Exception:
+            logging.exception("Caption yangilashda xato:")
+            await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
+        await state.clear()
+    else:
+        # Serial uchun — poster ham yangilanadimi, so'raymiz
+        await state.update_data(new_description=message.text)
+        await message.answer(
+            "🖼 Yangi poster (rasm) yuboring.\n"
+            "Agar rasmni o'zgartirmoqchi bo'lmasangiz, \"yo'q\" deb yozing:"
+        )
+        await state.set_state(EditContent.waiting_for_poster)
+
+
+# 0.11. Serial uchun — yangi poster yoki eskisini saqlab qolish
+@dp.message(EditContent.waiting_for_poster, F.photo)
+async def process_edit_poster_new(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+    new_photo_file_id = message.photo[-1].file_id
+
+    save_series_info(code, data["new_description"], new_photo_file_id)
+    await message.answer("✅ Tavsif va poster muvaffaqiyatli yangilandi!")
+    await state.clear()
+
+
+@dp.message(EditContent.waiting_for_poster, F.text.lower() == "yo'q")
+async def process_edit_poster_keep(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+
+    old_info = get_series_info(code)
+    old_photo_file_id = old_info[1] if old_info else None
+
+    save_series_info(code, data["new_description"], old_photo_file_id)
+    await message.answer("✅ Tavsif muvaffaqiyatli yangilandi (poster o'zgarmadi)!")
+    await state.clear()
+
+
+@dp.message(EditContent.waiting_for_poster)
+async def process_edit_poster_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, rasm yuboring yoki \"yo'q\" deb yozing.")
+
+
 # 1. Videoni qabul qilish (faqat admin)
 @dp.message(F.video)
 async def start_upload(message: types.Message, state: FSMContext):
