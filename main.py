@@ -2,6 +2,7 @@ import asyncio
 import os
 import logging
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -26,6 +27,12 @@ MOVIES_DB: dict[str, int] = {}   # {"123": message_id}
 
 class UploadMovie(StatesGroup):
     waiting_for_code = State()
+
+
+# 0. Start komandasi
+@dp.message(Command("start"))
+async def start_command(message: types.Message):
+    await message.answer("Xush kelibsiz! Kino kodini yuboring (masalan: 123).")
 
 
 # 2. Videoni qabul qilish (faqat admin)
@@ -83,6 +90,12 @@ async def get_movie(message: types.Message):
     except Exception as e:
         logging.exception("Kino yuborishda xato:")
         await message.answer("❌ Kinoni yuborib bo'lmadi, keyinroq urinib ko'ring.")
+
+
+# 5. Boshqa hech qaysi handlerga mos kelmagan xabarlar uchun
+@dp.message()
+async def fallback_handler(message: types.Message):
+    await message.answer("❗ Iltimos, kino kodini raqam bilan yuboring yoki /start bosing.")
 
 
 async def main():
