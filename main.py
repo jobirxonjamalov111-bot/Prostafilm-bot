@@ -2,12 +2,13 @@ import asyncio
 import os
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 # 1. Sozlamalar — hammasi Railway Variables'dan olinadi, kodda hech narsa ochiq yozilmagan
 API_TOKEN = os.getenv("API_TOKEN")
@@ -42,6 +43,10 @@ def init_db():
             user_id INTEGER PRIMARY KEY
         )
     """)
+
+    user_columns = [row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "joined_at" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN joined_at TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS episodes (
             series_code TEXT NOT NULL,
@@ -63,6 +68,12 @@ def init_db():
             downloads INTEGER NOT NULL DEFAULT 0
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
 
     # Eski bazalarda "description" / "poster_file_id" ustunlari bo'lmasligi mumkin — migratsiya
     existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(movies)").fetchall()]
@@ -79,13 +90,20 @@ def save_user(user_id: int) -> bool:
     """Foydalanuvchini bazaga qo'shadi. Agar u YANGI bo'lsa True qaytaradi."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.execute(
-        "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
-        (user_id,)
+        "INSERT OR IGNORE INTO users (user_id, joined_at) VALUES (?, ?)",
+        (user_id, datetime.now(timezone.utc).isoformat())
     )
     conn.commit()
     is_new = cursor.rowcount > 0
     conn.close()
     return is_new
+
+
+def get_user_joined(user_id: int) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT joined_at FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 
 def get_user_count() -> int:
@@ -259,6 +277,42 @@ class EditContent(StatesGroup):
     waiting_for_poster = State()
 
 
+class OrderRequest(StatesGroup):
+    waiting_for_text = State()
+
+
+class SettingsUpdate(StatesGroup):
+    waiting_for_banner = State()
+    waiting_for_welcome_text = State()
+
+
+def get_setting(key: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def set_setting(key: str, value: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (key, value)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_main_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="🔍 Kino qidirish"))
+    builder.add(types.KeyboardButton(text="❓ Yordam"))
+    builder.add(types.KeyboardButton(text="🎬 Kino buyurtma berish"))
+    builder.add(types.KeyboardButton(text="👤 Profilim"))
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
+
+
 # 0. Start komandasi
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
@@ -289,7 +343,35 @@ async def start_command(message: types.Message):
         if delivered:
             return
 
-    await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring 👇 (masalan: 123)")
+    await send_welcome(message.chat.id)
+
+
+DEFAULT_WELCOME_TEXT = (
+    "👋 Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
+    "🍿 Bot orqali siz kino/seriallarni nomi yoki kodi bo'yicha qidirishingiz mumkin.\n\n"
+    "👇 Pastdagi tugmalardan foydalaning:"
+)
+
+
+async def send_welcome(chat_id: int):
+    banner = get_setting("welcome_photo_file_id")
+    text = get_setting("welcome_text") or DEFAULT_WELCOME_TEXT
+
+    if banner:
+        await bot.send_photo(
+            chat_id,
+            photo=banner,
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+    else:
+        await bot.send_message(
+            chat_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
 
 
 # 0.1. Admin uchun ommaviy xabar (broadcast) yuborish
@@ -328,6 +410,55 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         await asyncio.sleep(0.05)  # Telegram limitiga tegib ketmaslik uchun
 
     await message.answer(f"✅ Yuborildi: {success} ta\n❌ Yuborilmadi: {failed} ta")
+
+
+# 0.2.1. Admin uchun — welcome banner rasmini sozlash
+@dp.message(Command("setbanner"))
+async def setbanner_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer("🖼 Yangi banner rasmini yuboring:")
+    await state.set_state(SettingsUpdate.waiting_for_banner)
+
+
+@dp.message(SettingsUpdate.waiting_for_banner, F.photo)
+async def process_banner(message: types.Message, state: FSMContext):
+    file_id = message.photo[-1].file_id
+    set_setting("welcome_photo_file_id", file_id)
+    await message.answer("✅ Banner muvaffaqiyatli saqlandi!")
+    await state.clear()
+
+
+@dp.message(SettingsUpdate.waiting_for_banner)
+async def process_banner_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, rasm yuboring.")
+
+
+# 0.2.2. Admin uchun — welcome matnini sozlash
+@dp.message(Command("setwelcome"))
+async def setwelcome_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer(
+        "📝 Yangi welcome matnini yuboring.\n\n"
+        "Qalin matn uchun: <b>matn</b>\n"
+        "Qiya matn uchun: <i>matn</i>\n"
+        "(HTML teglaridan foydalanishingiz mumkin)"
+    )
+    await state.set_state(SettingsUpdate.waiting_for_welcome_text)
+
+
+@dp.message(SettingsUpdate.waiting_for_welcome_text)
+async def process_welcome_text(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida yuboring!")
+        return
+
+    set_setting("welcome_text", message.text)
+    await message.answer("✅ Welcome matni muvaffaqiyatli saqlandi!")
+    await state.clear()
 
 
 # 0.3. Serial yuklashni boshlash (faqat admin)
@@ -676,6 +807,74 @@ async def process_movie_poster_wrong(message: types.Message):
 
 
 # 4. Kino/serial qidirish (foydalanuvchi uchun) — kod orqali
+@dp.message(F.text == "🔍 Kino qidirish")
+async def search_button(message: types.Message):
+    await message.answer(
+        "🔎 Kino yoki serial kodini (masalan: 123) yoki nomini (masalan: Yunus Emre) yozing:"
+    )
+
+
+@dp.message(F.text == "❓ Yordam")
+async def help_button(message: types.Message):
+    await message.answer(
+        "ℹ️ Botdan qanday foydalanish mumkin:\n\n"
+        "1️⃣ Kino yoki serial kodini bilsangiz — shunchaki raqamni yuboring (masalan: 123)\n"
+        "2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Yunus Emre)\n"
+        "3️⃣ Chiqqan natijalardan birini tanlang\n\n"
+        "Yordam kerak bo'lsa, botni qayta ishga tushirish uchun /start ni bosing."
+    )
+
+
+@dp.message(F.text == "👤 Profilim")
+async def profile_button(message: types.Message):
+    user = message.from_user
+    username = f"@{user.username}" if user.username else "yo'q"
+    joined = get_user_joined(user.id)
+    joined_display = joined.split("T")[0] if joined else "noma'lum"
+
+    await message.answer(
+        "👤 Profilim\n\n"
+        f"📛 Ism: {user.full_name}\n"
+        f"🔗 Username: {username}\n"
+        f"🆔 ID: {user.id}\n"
+        f"📅 Ro'yxatdan o'tgan sana: {joined_display}"
+    )
+
+
+@dp.message(F.text == "🎬 Kino buyurtma berish")
+async def order_button(message: types.Message, state: FSMContext):
+    await message.answer(
+        "📝 Qaysi kino yoki serialni istayotganingizni yozing "
+        "(nomi, yili — agar bilsangiz):"
+    )
+    await state.set_state(OrderRequest.waiting_for_text)
+
+
+@dp.message(OrderRequest.waiting_for_text)
+async def process_order(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida yozing.")
+        return
+
+    user = message.from_user
+    username = f"@{user.username}" if user.username else "yo'q"
+
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            "🎬 Yangi kino buyurtmasi!\n\n"
+            f"👤 Ism: {user.full_name}\n"
+            f"🔗 Username: {username}\n"
+            f"🆔 ID: {user.id}\n\n"
+            f"📝 So'ralgan: {message.text}"
+        )
+    except Exception:
+        logging.exception("Buyurtmani adminga yuborishda xato:")
+
+    await message.answer("✅ So'rovingiz qabul qilindi! Tez orada ko'rib chiqamiz.")
+    await state.clear()
+
+
 @dp.message(F.text.isdigit())
 async def get_movie_handler(message: types.Message):
     code = message.text
