@@ -176,6 +176,7 @@ class SeriesUpload(StatesGroup):
 
 class EditContent(StatesGroup):
     waiting_for_code = State()
+    waiting_for_action = State()
     waiting_for_description = State()
     waiting_for_poster = State()
 
@@ -364,13 +365,19 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         return
 
     code = message.text
+    is_series = bool(get_episodes(code))
+    is_movie = get_movie(code) is not None
 
-    if get_movie(code) is not None:
+    if is_series:
+        await state.update_data(code=code)
+        builder = InlineKeyboardBuilder()
+        builder.add(types.InlineKeyboardButton(text="📝 Tavsif/Poster", callback_data=f"edit_action:info:{code}"))
+        builder.add(types.InlineKeyboardButton(text="➕ Yangi qism qo'shish", callback_data=f"edit_action:addep:{code}"))
+        builder.adjust(1)
+        await message.answer("Nimani tahrirlaysiz?", reply_markup=builder.as_markup())
+        await state.set_state(EditContent.waiting_for_action)
+    elif is_movie:
         await state.update_data(code=code, content_type="movie")
-        await message.answer("📝 Yangi tavsif matnini yuboring:")
-        await state.set_state(EditContent.waiting_for_description)
-    elif get_series_info(code) is not None:
-        await state.update_data(code=code, content_type="series")
         await message.answer("📝 Yangi tavsif matnini yuboring:")
         await state.set_state(EditContent.waiting_for_description)
     else:
@@ -378,7 +385,39 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-# 0.10. Yangi tavsifni qabul qilish
+# 0.9.1. "Tavsif/Poster" tanlanganda
+@dp.callback_query(F.data.startswith("edit_action:info:"))
+async def edit_action_info(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    await state.update_data(code=code, content_type="series")
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data=f"edit_skip:description:{code}"))
+    await callback.message.answer(
+        "📝 Yangi tavsif matnini yuboring (o'zgartirmoqchi bo'lmasangiz, o'tkazib yuboring):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(EditContent.waiting_for_description)
+    await callback.answer()
+
+
+# 0.9.2. "Yangi qism qo'shish" tanlanganda
+@dp.callback_query(F.data.startswith("edit_action:addep:"))
+async def edit_action_addep(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    existing = get_episodes(code)
+    next_episode = (existing[-1][0] + 1) if existing else 1
+
+    await state.update_data(series_code=code, next_episode=next_episode)
+    await callback.message.answer(
+        f"🎬 {next_episode}-qism videosini yuboring.\n"
+        f"Barcha yangi qismlarni yuklab bo'lgach /done deb yozing."
+    )
+    await state.set_state(SeriesUpload.waiting_for_episode)
+    await callback.answer()
+
+
+# 0.10. Yangi tavsifni qabul qilish (matn orqali)
 @dp.message(EditContent.waiting_for_description)
 async def process_edit_description(message: types.Message, state: FSMContext):
     if not message.text:
@@ -390,7 +429,6 @@ async def process_edit_description(message: types.Message, state: FSMContext):
     content_type = data["content_type"]
 
     if content_type == "movie":
-        # Kanaldagi video xabarining caption'ini to'g'ridan-to'g'ri yangilaymiz
         new_caption = f"🎬 {message.text}\n\n🔑 Kino kodi: {code}"
         message_id = get_movie(code)
         try:
@@ -405,16 +443,33 @@ async def process_edit_description(message: types.Message, state: FSMContext):
             await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
         await state.clear()
     else:
-        # Serial uchun — poster ham yangilanadimi, so'raymiz
         await state.update_data(new_description=message.text)
-        await message.answer(
-            "🖼 Yangi poster (rasm) yuboring.\n"
-            "Agar rasmni o'zgartirmoqchi bo'lmasangiz, \"yo'q\" deb yozing:"
-        )
-        await state.set_state(EditContent.waiting_for_poster)
+        await ask_for_poster(message, state, code)
 
 
-# 0.11. Serial uchun — yangi poster yoki eskisini saqlab qolish
+# 0.10.1. Tavsifni o'tkazib yuborish (eski tavsif saqlanadi)
+@dp.callback_query(F.data.startswith("edit_skip:description:"))
+async def edit_skip_description(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    old_info = get_series_info(code)
+    old_description = old_info[0] if old_info else ""
+
+    await state.update_data(new_description=old_description)
+    await ask_for_poster(callback.message, state, code)
+    await callback.answer()
+
+
+async def ask_for_poster(message: types.Message, state: FSMContext, code: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data=f"edit_skip:poster:{code}"))
+    await message.answer(
+        "🖼 Yangi poster (rasm) yuboring (o'zgartirmoqchi bo'lmasangiz, o'tkazib yuboring):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(EditContent.waiting_for_poster)
+
+
+# 0.11. Yangi poster qabul qilinganda
 @dp.message(EditContent.waiting_for_poster, F.photo)
 async def process_edit_poster_new(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -426,8 +481,9 @@ async def process_edit_poster_new(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-@dp.message(EditContent.waiting_for_poster, F.text.lower() == "yo'q")
-async def process_edit_poster_keep(message: types.Message, state: FSMContext):
+# 0.11.1. Posterni o'tkazib yuborish (eski poster saqlanadi)
+@dp.callback_query(F.data.startswith("edit_skip:poster:"))
+async def edit_skip_poster(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     code = data["code"]
 
@@ -435,13 +491,14 @@ async def process_edit_poster_keep(message: types.Message, state: FSMContext):
     old_photo_file_id = old_info[1] if old_info else None
 
     save_series_info(code, data["new_description"], old_photo_file_id)
-    await message.answer("✅ Tavsif muvaffaqiyatli yangilandi (poster o'zgarmadi)!")
+    await callback.message.answer("✅ Tavsif muvaffaqiyatli yangilandi (poster o'zgarmadi)!")
     await state.clear()
+    await callback.answer()
 
 
 @dp.message(EditContent.waiting_for_poster)
 async def process_edit_poster_wrong(message: types.Message):
-    await message.answer("❗ Iltimos, rasm yuboring yoki \"yo'q\" deb yozing.")
+    await message.answer("❗ Iltimos, rasm yuboring yoki yuqoridagi \"O'tkazib yuborish\" tugmasini bosing.")
 
 
 # 1. Videoni qabul qilish (faqat admin)
