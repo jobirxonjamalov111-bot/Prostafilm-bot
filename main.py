@@ -304,13 +304,13 @@ def set_setting(key: str, value: str):
 
 
 def get_main_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="🔍 Kino qidirish"))
-    builder.add(types.KeyboardButton(text="❓ Yordam"))
-    builder.add(types.KeyboardButton(text="🎬 Kino buyurtma berish"))
-    builder.add(types.KeyboardButton(text="👤 Profilim"))
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", callback_data="menu:search"))
+    builder.add(types.InlineKeyboardButton(text="❓ Yordam", callback_data="menu:help"))
+    builder.add(types.InlineKeyboardButton(text="🎬 Kino buyurtma berish", callback_data="menu:order"))
+    builder.add(types.InlineKeyboardButton(text="👤 Profilim", callback_data="menu:profile"))
     builder.adjust(2)
-    return builder.as_markup(resize_keyboard=True)
+    return builder.as_markup()
 
 
 # 0. Start komandasi
@@ -347,7 +347,7 @@ async def start_command(message: types.Message):
 
 
 DEFAULT_WELCOME_TEXT = (
-    " Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
+    "👋 Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
     "🍿 Bot orqali siz kino/seriallarni nomi yoki kodi bo'yicha qidirishingiz mumkin.\n\n"
     "👇 Pastdagi tugmalardan foydalaning:"
 )
@@ -806,48 +806,54 @@ async def process_movie_poster_wrong(message: types.Message):
     await message.answer("❗ Iltimos, rasm yuboring yoki yuqoridagi \"O'tkazib yuborish\" tugmasini bosing.")
 
 
-# 4. Kino/serial qidirish (foydalanuvchi uchun) — kod orqali
-@dp.message(F.text == "🔍 Kino qidirish")
-async def search_button(message: types.Message):
-    await message.answer(
-        "🔎 Kino yoki serial kodini (masalan: 123) yoki nomini (masalan: Yunus Emre) yozing:"
+# 4. Asosiy menyu tugmalari (inline)
+@dp.callback_query(F.data == "menu:search")
+async def menu_search(callback: types.CallbackQuery):
+    await callback.message.answer(
+        "🔎 Kino yoki serial kodini (masalan: 123) yoki nomini (masalan: Yunus Emre) yozing:",
+        reply_markup=types.ForceReply(input_field_placeholder="🔍 Nomi yoki kodini yozing...")
     )
+    await callback.answer()
 
 
-@dp.message(F.text == "❓ Yordam")
-async def help_button(message: types.Message):
-    await message.answer(
+@dp.callback_query(F.data == "menu:help")
+async def menu_help(callback: types.CallbackQuery):
+    await callback.message.answer(
         "ℹ️ Botdan qanday foydalanish mumkin:\n\n"
         "1️⃣ Kino yoki serial kodini bilsangiz — shunchaki raqamni yuboring (masalan: 123)\n"
         "2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Yunus Emre)\n"
         "3️⃣ Chiqqan natijalardan birini tanlang\n\n"
         "Yordam kerak bo'lsa, botni qayta ishga tushirish uchun /start ni bosing."
     )
+    await callback.answer()
 
 
-@dp.message(F.text == "👤 Profilim")
-async def profile_button(message: types.Message):
-    user = message.from_user
+@dp.callback_query(F.data == "menu:profile")
+async def menu_profile(callback: types.CallbackQuery):
+    user = callback.from_user
     username = f"@{user.username}" if user.username else "yo'q"
     joined = get_user_joined(user.id)
     joined_display = joined.split("T")[0] if joined else "noma'lum"
 
-    await message.answer(
+    await callback.message.answer(
         "👤 Profilim\n\n"
         f"📛 Ism: {user.full_name}\n"
         f"🔗 Username: {username}\n"
         f"🆔 ID: {user.id}\n"
         f"📅 Ro'yxatdan o'tgan sana: {joined_display}"
     )
+    await callback.answer()
 
 
-@dp.message(F.text == "🎬 Kino buyurtma berish")
-async def order_button(message: types.Message, state: FSMContext):
-    await message.answer(
+@dp.callback_query(F.data == "menu:order")
+async def menu_order(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer(
         "📝 Qaysi kino yoki serialni istayotganingizni yozing "
-        "(nomi, yili — agar bilsangiz):"
+        "(nomi, yili — agar bilsangiz):",
+        reply_markup=types.ForceReply(input_field_placeholder="🎬 Kino nomini yozing...")
     )
     await state.set_state(OrderRequest.waiting_for_text)
+    await callback.answer()
 
 
 @dp.message(OrderRequest.waiting_for_text)
