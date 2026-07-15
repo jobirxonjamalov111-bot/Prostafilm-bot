@@ -323,6 +323,9 @@ class EditContent(StatesGroup):
     waiting_for_action = State()
     waiting_for_description = State()
     waiting_for_poster = State()
+    waiting_for_movie_poster = State()
+    waiting_for_movie_video = State()
+    waiting_for_episode_video = State()
 
 
 class OrderRequest(StatesGroup):
@@ -341,17 +344,30 @@ async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
         file_bytes_io = await bot.download_file(file.file_path)
         data = file_bytes_io.read()
 
-        async with aiohttp.ClientSession() as session:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"}
+
+        async with aiohttp.ClientSession(headers=headers) as session:
             form = aiohttp.FormData()
             form.add_field("file", data, filename="poster.jpg", content_type="image/jpeg")
             async with session.post(
                 "https://telegra.ph/upload",
                 data=form,
-                timeout=aiohttp.ClientTimeout(total=15)
+                timeout=aiohttp.ClientTimeout(total=20)
             ) as resp:
-                result = await resp.json()
+                raw_text = await resp.text()
+                if resp.status != 200:
+                    logging.error(f"Telegraph javob berdi status={resp.status}: {raw_text}")
+                    return None
+
+                import json as _json
+                result = _json.loads(raw_text)
+
                 if isinstance(result, list) and result and "src" in result[0]:
-                    return "https://telegra.ph" + result[0]["src"]
+                    url = "https://telegra.ph" + result[0]["src"]
+                    logging.info(f"Telegraph'ga muvaffaqiyatli yuklandi: {url}")
+                    return url
+                else:
+                    logging.error(f"Telegraph kutilmagan javob qaytardi: {raw_text}")
     except Exception:
         logging.exception("Telegraph'ga poster yuklashda xato:")
     return None
@@ -501,6 +517,46 @@ async def setbaseline_command(message: types.Message):
     new_value = int(parts[1].strip())
     set_download_baseline(new_value)
     await message.answer(f"✅ Boshlang'ich raqam {new_value} ga o'rnatildi. Endi har bir kino/serial kamida shuncha yuklashlar bilan ko'rinadi.")
+
+
+# 0.2.4. Admin uchun — mavjud posterni Telegraph'ga qayta yuklashga urinish
+@dp.message(Command("fixposter"))
+async def fixposter_command(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer("Foydalanish: /fixposter <kod>\nMasalan: /fixposter 5")
+        return
+
+    code = parts[1].strip()
+    is_series = bool(get_episodes(code))
+
+    if is_series:
+        info = get_series_info(code)
+        photo_file_id = info[1] if info else None
+    else:
+        photo_file_id = get_movie_poster(code)
+
+    if not photo_file_id:
+        await message.answer("❌ Bu kod uchun saqlangan poster topilmadi (avval rasm yuklashingiz kerak).")
+        return
+
+    await message.answer("⏳ Telegraph'ga qayta yuklanmoqda...")
+    poster_url = await upload_poster_to_telegraph(photo_file_id)
+
+    if not poster_url:
+        await message.answer("❌ Telegraph'ga yuklab bo'lmadi. Railway loglarini tekshiring (aniq xato u yerda ko'rinadi).")
+        return
+
+    if is_series:
+        old_description = info[0] if info else ""
+        save_series_info(code, old_description, photo_file_id, poster_url)
+    else:
+        set_movie_poster(code, photo_file_id, poster_url)
+
+    await message.answer(f"✅ Muvaffaqiyatli! Yangi URL: {poster_url}")
 
 
 # 0.2.1. Admin uchun — welcome banner rasmini sozlash
@@ -684,16 +740,148 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         builder = InlineKeyboardBuilder()
         builder.add(types.InlineKeyboardButton(text="📝 Tavsif/Poster", callback_data=f"edit_action:info:{code}"))
         builder.add(types.InlineKeyboardButton(text="➕ Yangi qism qo'shish", callback_data=f"edit_action:addep:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🔁 Qism videosini almashtirish", callback_data=f"edit_action:replaceep:{code}"))
         builder.adjust(1)
         await message.answer("Nimani tahrirlaysiz?", reply_markup=builder.as_markup())
         await state.set_state(EditContent.waiting_for_action)
     elif is_movie:
-        await state.update_data(code=code, content_type="movie")
-        await message.answer("📝 Yangi tavsif matnini yuboring:")
-        await state.set_state(EditContent.waiting_for_description)
+        await state.update_data(code=code)
+        builder = InlineKeyboardBuilder()
+        builder.add(types.InlineKeyboardButton(text="📝 Tavsif", callback_data=f"edit_action:moviedesc:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🖼 Poster", callback_data=f"edit_action:moviepic:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🎥 Videoni almashtirish", callback_data=f"edit_action:movievideo:{code}"))
+        builder.adjust(1)
+        await message.answer("Nimani tahrirlaysiz?", reply_markup=builder.as_markup())
+        await state.set_state(EditContent.waiting_for_action)
     else:
         await message.answer("❌ Bunday kodli kino yoki serial topilmadi!")
         await state.clear()
+
+
+# 0.9.0.1. Kino tavsifini tahrirlash
+@dp.callback_query(F.data.startswith("edit_action:moviedesc:"))
+async def edit_action_moviedesc(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    await state.update_data(code=code, content_type="movie")
+    await callback.message.answer("📝 Yangi tavsif matnini yuboring:")
+    await state.set_state(EditContent.waiting_for_description)
+    await callback.answer()
+
+
+# 0.9.0.2. Kino posterini tahrirlash
+@dp.callback_query(F.data.startswith("edit_action:moviepic:"))
+async def edit_action_moviepic(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    await state.update_data(code=code)
+    await callback.message.answer("🖼 Yangi poster (rasm) yuboring:")
+    await state.set_state(EditContent.waiting_for_movie_poster)
+    await callback.answer()
+
+
+@dp.message(EditContent.waiting_for_movie_poster, F.photo)
+async def process_edit_movie_poster(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+    new_photo_file_id = message.photo[-1].file_id
+
+    poster_url = await upload_poster_to_telegraph(new_photo_file_id)
+    set_movie_poster(code, new_photo_file_id, poster_url)
+    await message.answer("✅ Poster muvaffaqiyatli yangilandi!")
+    await state.clear()
+
+
+@dp.message(EditContent.waiting_for_movie_poster)
+async def process_edit_movie_poster_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, rasm yuboring.")
+
+
+# 0.9.0.3. Kino videosini almashtirish
+@dp.callback_query(F.data.startswith("edit_action:movievideo:"))
+async def edit_action_movievideo(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    await state.update_data(code=code)
+    await callback.message.answer("🎥 Yangi video faylni yuboring:")
+    await state.set_state(EditContent.waiting_for_movie_video)
+    await callback.answer()
+
+
+@dp.message(EditContent.waiting_for_movie_video, F.video)
+async def process_edit_movie_video(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+    message_id = get_movie(code)
+    description = get_movie_title(code) or ""
+    caption = f"🎬 {description}\n\n🔑 Kino kodi: {code}"
+
+    try:
+        await bot.edit_message_media(
+            chat_id=CHANNEL_ID,
+            message_id=message_id,
+            media=types.InputMediaVideo(media=message.video.file_id, caption=caption)
+        )
+        await message.answer("✅ Video muvaffaqiyatli almashtirildi!")
+    except Exception:
+        logging.exception("Videoni almashtirishda xato:")
+        await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
+    await state.clear()
+
+
+@dp.message(EditContent.waiting_for_movie_video)
+async def process_edit_movie_video_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, video yuboring.")
+
+
+# 0.9.0.4. Serial qismi videosini almashtirish — avval qism raqamini tanlash
+@dp.callback_query(F.data.startswith("edit_action:replaceep:"))
+async def edit_action_replaceep(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    episodes = get_episodes(code)
+
+    builder = InlineKeyboardBuilder()
+    for episode_number, _ in episodes:
+        builder.add(types.InlineKeyboardButton(
+            text=f"{episode_number}-qism",
+            callback_data=f"edit_pick_ep:{code}:{episode_number}"
+        ))
+    builder.adjust(3)
+    await callback.message.answer("Qaysi qismni almashtirasiz?", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("edit_pick_ep:"))
+async def edit_pick_episode(callback: types.CallbackQuery, state: FSMContext):
+    _, code, episode_number = callback.data.split(":")
+    await state.update_data(code=code, episode_number=int(episode_number))
+    await callback.message.answer(f"🎥 {episode_number}-qism uchun yangi videoni yuboring:")
+    await state.set_state(EditContent.waiting_for_episode_video)
+    await callback.answer()
+
+
+@dp.message(EditContent.waiting_for_episode_video, F.video)
+async def process_edit_episode_video(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+    episode_number = data["episode_number"]
+    message_id = get_episode_message_id(code, episode_number)
+
+    caption = f"🎬 Serial kodi: {code}\n📺 {episode_number}-qism"
+
+    try:
+        await bot.edit_message_media(
+            chat_id=CHANNEL_ID,
+            message_id=message_id,
+            media=types.InputMediaVideo(media=message.video.file_id, caption=caption)
+        )
+        await message.answer(f"✅ {episode_number}-qism videosi muvaffaqiyatli almashtirildi!")
+    except Exception:
+        logging.exception("Qism videosini almashtirishda xato:")
+        await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
+    await state.clear()
+
+
+@dp.message(EditContent.waiting_for_episode_video)
+async def process_edit_episode_video_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, video yuboring.")
 
 
 # 0.9.1. "Tavsif/Poster" tanlanganda
