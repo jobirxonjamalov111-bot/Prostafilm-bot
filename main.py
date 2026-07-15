@@ -2,6 +2,7 @@ import asyncio
 import os
 import logging
 import sqlite3
+import aiohttp
 from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -75,12 +76,18 @@ def init_db():
         )
     """)
 
-    # Eski bazalarda "description" / "poster_file_id" ustunlari bo'lmasligi mumkin — migratsiya
+    # Eski bazalarda "description" / "poster_file_id" / "poster_url" ustunlari bo'lmasligi mumkin — migratsiya
     existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(movies)").fetchall()]
     if "description" not in existing_columns:
         conn.execute("ALTER TABLE movies ADD COLUMN description TEXT")
     if "poster_file_id" not in existing_columns:
         conn.execute("ALTER TABLE movies ADD COLUMN poster_file_id TEXT")
+    if "poster_url" not in existing_columns:
+        conn.execute("ALTER TABLE movies ADD COLUMN poster_url TEXT")
+
+    series_columns = [row[1] for row in conn.execute("PRAGMA table_info(series_info)").fetchall()]
+    if "poster_url" not in series_columns:
+        conn.execute("ALTER TABLE series_info ADD COLUMN poster_url TEXT")
 
     conn.commit()
     conn.close()
@@ -151,11 +158,11 @@ def get_episode_message_id(series_code: str, episode_number: int) -> int | None:
     return row[0] if row else None
 
 
-def save_series_info(series_code: str, description: str, photo_file_id: str | None):
+def save_series_info(series_code: str, description: str, photo_file_id: str | None, poster_url: str | None = None):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT OR REPLACE INTO series_info (series_code, description, photo_file_id) VALUES (?, ?, ?)",
-        (series_code, description, photo_file_id)
+        "INSERT OR REPLACE INTO series_info (series_code, description, photo_file_id, poster_url) VALUES (?, ?, ?, ?)",
+        (series_code, description, photo_file_id, poster_url)
     )
     conn.commit()
     conn.close()
@@ -170,6 +177,15 @@ def get_series_info(series_code: str) -> tuple[str, str] | None:
     ).fetchone()
     conn.close()
     return row if row else None
+
+
+def get_series_poster_url(series_code: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT poster_url FROM series_info WHERE series_code = ?", (series_code,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 
 def increment_downloads(code: str):
@@ -213,9 +229,12 @@ def get_movie(code: str) -> int | None:
     return row[0] if row else None
 
 
-def set_movie_poster(code: str, poster_file_id: str):
+def set_movie_poster(code: str, poster_file_id: str, poster_url: str | None = None):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE movies SET poster_file_id = ? WHERE code = ?", (poster_file_id, code))
+    conn.execute(
+        "UPDATE movies SET poster_file_id = ?, poster_url = ? WHERE code = ?",
+        (poster_file_id, poster_url, code)
+    )
     conn.commit()
     conn.close()
 
@@ -223,6 +242,13 @@ def set_movie_poster(code: str, poster_file_id: str):
 def get_movie_poster(code: str) -> str | None:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT poster_file_id FROM movies WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def get_movie_poster_url(code: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT poster_url FROM movies WHERE code = ?", (code,)).fetchone()
     conn.close()
     return row[0] if row and row[0] else None
 
@@ -296,6 +322,29 @@ class OrderRequest(StatesGroup):
 class SettingsUpdate(StatesGroup):
     waiting_for_banner = State()
     waiting_for_welcome_text = State()
+
+
+async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
+    """Posterni Telegraph'ga yuklab, ochiq URL qaytaradi (xato bo'lsa None)."""
+    try:
+        file = await bot.get_file(photo_file_id)
+        file_bytes_io = await bot.download_file(file.file_path)
+        data = file_bytes_io.read()
+
+        async with aiohttp.ClientSession() as session:
+            form = aiohttp.FormData()
+            form.add_field("file", data, filename="poster.jpg", content_type="image/jpeg")
+            async with session.post(
+                "https://telegra.ph/upload",
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                result = await resp.json()
+                if isinstance(result, list) and result and "src" in result[0]:
+                    return "https://telegra.ph" + result[0]["src"]
+    except Exception:
+        logging.exception("Telegraph'ga poster yuklashda xato:")
+    return None
 
 
 def get_setting(key: str) -> str | None:
@@ -513,7 +562,8 @@ async def process_series_poster(message: types.Message, state: FSMContext):
     data = await state.get_data()
     photo_file_id = message.photo[-1].file_id  # eng katta o'lchamdagisi
 
-    save_series_info(data["series_code"], data["description"], photo_file_id)
+    poster_url = await upload_poster_to_telegraph(photo_file_id)
+    save_series_info(data["series_code"], data["description"], photo_file_id, poster_url)
     await state.update_data(next_episode=1)
 
     await message.answer(
@@ -708,7 +758,8 @@ async def process_edit_poster_new(message: types.Message, state: FSMContext):
     code = data["code"]
     new_photo_file_id = message.photo[-1].file_id
 
-    save_series_info(code, data["new_description"], new_photo_file_id)
+    poster_url = await upload_poster_to_telegraph(new_photo_file_id)
+    save_series_info(code, data["new_description"], new_photo_file_id, poster_url)
     await message.answer("✅ Tavsif va poster muvaffaqiyatli yangilandi!")
     await state.clear()
 
@@ -721,8 +772,9 @@ async def edit_skip_poster(callback: types.CallbackQuery, state: FSMContext):
 
     old_info = get_series_info(code)
     old_photo_file_id = old_info[1] if old_info else None
+    old_poster_url = get_series_poster_url(code)
 
-    save_series_info(code, data["new_description"], old_photo_file_id)
+    save_series_info(code, data["new_description"], old_photo_file_id, old_poster_url)
     await callback.message.answer("✅ Tavsif muvaffaqiyatli yangilandi (poster o'zgarmadi)!")
     await state.clear()
     await callback.answer()
@@ -790,7 +842,8 @@ async def finalize_movie_upload(chat_id: int, state: FSMContext, poster_file_id:
         )
         save_movie(code, sent_msg.message_id, tavsif)
         if poster_file_id:
-            set_movie_poster(code, poster_file_id)
+            poster_url = await upload_poster_to_telegraph(poster_file_id)
+            set_movie_poster(code, poster_file_id, poster_url)
         await bot.send_message(chat_id, f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
     except Exception:
         logging.exception("Kanalga video yuborishda xato:")
@@ -1028,7 +1081,7 @@ async def inline_search(inline_query: types.InlineQuery):
         short_title = title.split("\n")[0][:60]
         description_line = f"⬇️ Yuklashlar: {downloads}"
 
-        poster_file_id = get_movie_poster(code) if kind == "movie" else (get_series_info(code) or (None, None))[1]
+        poster_url = get_movie_poster_url(code) if kind == "movie" else get_series_poster_url(code)
 
         builder = InlineKeyboardBuilder()
         label = "🎬 Kinoni olish" if kind == "movie" else "📺 Barcha qismlarni ko'rish"
@@ -1039,23 +1092,14 @@ async def inline_search(inline_query: types.InlineQuery):
 
         caption = f"{title}\n\n🔑 Kodi: {code}"
 
-        if poster_file_id:
-            items.append(types.InlineQueryResultCachedPhoto(
-                id=f"{kind}:{code}",
-                photo_file_id=poster_file_id,
-                title=short_title,
-                description=description_line,
-                caption=caption,
-                reply_markup=builder.as_markup()
-            ))
-        else:
-            items.append(types.InlineQueryResultArticle(
-                id=f"{kind}:{code}",
-                title=short_title,
-                description=description_line,
-                input_message_content=types.InputTextMessageContent(message_text=caption),
-                reply_markup=builder.as_markup()
-            ))
+        items.append(types.InlineQueryResultArticle(
+            id=f"{kind}:{code}",
+            title=short_title,
+            description=description_line,
+            thumbnail_url=poster_url if poster_url else None,
+            input_message_content=types.InputTextMessageContent(message_text=caption),
+            reply_markup=builder.as_markup()
+        ))
 
     await inline_query.answer(items, cache_time=5, is_personal=False)
 
