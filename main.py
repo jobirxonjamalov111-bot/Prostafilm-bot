@@ -425,9 +425,9 @@ async def start_command(message: types.Message):
 
 
 DEFAULT_WELCOME_TEXT = (
-    "👋 Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
-    "🍿 Bot orqali siz kino/seriallarni nomi yoki kodi bo'yicha qidirishingiz mumkin.\n\n"
-    "👇 Pastdagi tugmalardan foydalaning:"
+    "🎬 Assalomu alaykum! PROSTAFILM — Eng sara kinolar bazasi. 🍿\n\n"
+    "Istalgan filmni soniyalar ichida toping. Qidiruvni boshlash uchun kino nomini yoki kodini yozib yuboring\n\n"
+    "Yoki 👇 Pastdagi tugmalardan foydalaning:"
 )
 
 
@@ -702,7 +702,7 @@ async def finish_series(message: types.Message, state: FSMContext):
 # 0.7. Serial holatida video yoki /done bo'lmagan xabarlar uchun
 @dp.message(SeriesUpload.waiting_for_episode)
 async def series_wrong_content(message: types.Message):
-    await message.answer("❗ Iltimos, video yuboring yoki tugatish uchun /done yozing.")
+    await message.answer("❗ Iltimos, video yuboring yoki tugatish uchun /done yozing shepim")
 
 
 # 0.8. Mavjud kino/serialni tahrirlashni boshlash (faqat admin)
@@ -711,7 +711,7 @@ async def edit_command(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
 
-    await message.answer("✏️ Tahrirlamoqchi bo'lgan kino yoki serial kodini kiriting:")
+    await message.answer("✏️ Tahrirlamoqchi bo'lgan kino yoki serial kodini kiriting shepim:")
     await state.set_state(EditContent.waiting_for_code)
 
 
@@ -1088,9 +1088,9 @@ async def menu_help(callback: types.CallbackQuery):
     await callback.message.answer(
         "ℹ️ Botdan qanday foydalanish mumkin:\n\n"
         "1️⃣ Kino yoki serial kodini bilsangiz — shunchaki raqamni yuboring (masalan: 123)\n"
-        "2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Yunus Emre)\n"
+        "2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing namuna @prostafilmbot...... yoki Kino qidirish tugmasini bosing"
         "3️⃣ Chiqqan natijalardan birini tanlang\n\n"
-        "Yordam kerak bo'lsa, botni qayta ishga tushirish uchun /start ni bosing."
+        "Yordam kerak bo'lsa, @Tezrideadmin ga murojaat qiling"
     )
     await callback.answer()
 
