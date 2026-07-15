@@ -199,11 +199,21 @@ def increment_downloads(code: str):
     conn.close()
 
 
+def get_download_baseline() -> int:
+    value = get_setting("download_baseline")
+    return int(value) if value and value.isdigit() else 0
+
+
+def set_download_baseline(value: int):
+    set_setting("download_baseline", str(value))
+
+
 def get_downloads(code: str) -> int:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT downloads FROM stats WHERE code = ?", (code,)).fetchone()
     conn.close()
-    return row[0] if row else 0
+    real_count = row[0] if row else 0
+    return real_count + get_download_baseline()
 
 
 def save_movie(code: str, message_id: int, description: str | None = None):
@@ -471,6 +481,26 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         await asyncio.sleep(0.05)  # Telegram limitiga tegib ketmaslik uchun
 
     await message.answer(f"✅ Yuborildi: {success} ta\n❌ Yuborilmadi: {failed} ta")
+
+
+# 0.2.3. Admin uchun — yuklashlar sonining boshlang'ich bazasini sozlash
+@dp.message(Command("setbaseline"))
+async def setbaseline_command(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        current = get_download_baseline()
+        await message.answer(
+            f"ℹ️ Hozirgi boshlang'ich raqam: {current}\n\n"
+            f"O'zgartirish uchun: /setbaseline 100"
+        )
+        return
+
+    new_value = int(parts[1].strip())
+    set_download_baseline(new_value)
+    await message.answer(f"✅ Boshlang'ich raqam {new_value} ga o'rnatildi. Endi har bir kino/serial kamida shuncha yuklashlar bilan ko'rinadi.")
 
 
 # 0.2.1. Admin uchun — welcome banner rasmini sozlash
@@ -1024,6 +1054,10 @@ async def send_episode(callback: types.CallbackQuery):
 # 4.2. Nom bo'yicha qidiruv (kod emas, oddiy matn kiritilganda)
 @dp.message(F.text)
 async def search_by_name(message: types.Message):
+    # Inline natijadan tanlangan xabar (via_bot) qidiruv so'rovi emas — e'tiborsiz qoldiramiz
+    if message.via_bot is not None:
+        return
+
     query = message.text.strip()
     if not query or query.startswith("/"):
         return
@@ -1060,6 +1094,8 @@ async def pick_search_result(callback: types.CallbackQuery):
 # 5. Boshqa hech qaysi handlerga mos kelmagan xabarlar uchun
 @dp.message()
 async def fallback_handler(message: types.Message):
+    if message.via_bot is not None:
+        return
     await message.answer("❗ Iltimos, kino kodini raqam bilan yuboring yoki /start bosing.")
 
 
