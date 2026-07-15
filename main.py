@@ -344,11 +344,9 @@ async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
         file_bytes_io = await bot.download_file(file.file_path)
         data = file_bytes_io.read()
 
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"}
-
-        async with aiohttp.ClientSession(headers=headers) as session:
+        async with aiohttp.ClientSession() as session:
             form = aiohttp.FormData()
-            form.add_field("file", data, filename="poster.jpg", content_type="image/jpeg")
+            form.add_field("file", data, filename="poster.jpg")
             async with session.post(
                 "https://telegra.ph/upload",
                 data=form,
