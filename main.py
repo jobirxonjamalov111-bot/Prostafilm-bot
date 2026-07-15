@@ -1088,7 +1088,7 @@ async def menu_help(callback: types.CallbackQuery):
     await callback.message.answer(
         "ℹ️ Botdan qanday foydalanish mumkin:\n\n"
         "1️⃣ Kino yoki serial kodini bilsangiz — shunchaki raqamni yuboring (masalan: 123)\n"
-        "2️⃣ 2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Qasoskorlar)\n"
+        "2️⃣  Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Qasoskorlar)\n"
         "3️⃣ Chiqqan natijalardan birini tanlang\n\n"
         "Yordam kerak bo'lsa, @Tezrideadmin ga murojaat qiling"
     )
