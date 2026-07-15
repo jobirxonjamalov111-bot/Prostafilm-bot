@@ -425,8 +425,7 @@ async def start_command(message: types.Message):
 
 
 DEFAULT_WELCOME_TEXT = (
-    "Assalomu alaykum ! 
-     PROSTAFILM — Eng sara kinolar bazasi. 🍿"
+    "👋 Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
     "🍿 Bot orqali siz kino/seriallarni nomi yoki kodi bo'yicha qidirishingiz mumkin.\n\n"
     "👇 Pastdagi tugmalardan foydalaning:"
 )
