@@ -338,7 +338,7 @@ class SettingsUpdate(StatesGroup):
 
 
 async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
-    """Posterni Telegraph'ga yuklab, ochiq URL qaytaradi (xato bo'lsa None)."""
+    """Posterni Catbox.moe'ga yuklab, ochiq URL qaytaradi (xato bo'lsa None)."""
     try:
         file = await bot.get_file(photo_file_id)
         file_bytes_io = await bot.download_file(file.file_path)
@@ -346,28 +346,21 @@ async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
 
         async with aiohttp.ClientSession() as session:
             form = aiohttp.FormData()
-            form.add_field("file", data, filename="poster.jpg")
+            form.add_field("reqtype", "fileupload")
+            form.add_field("fileToUpload", data, filename="poster.jpg")
             async with session.post(
-                "https://telegra.ph/upload",
+                "https://catbox.moe/user/api.php",
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=20)
             ) as resp:
-                raw_text = await resp.text()
-                if resp.status != 200:
-                    logging.error(f"Telegraph javob berdi status={resp.status}: {raw_text}")
-                    return None
-
-                import json as _json
-                result = _json.loads(raw_text)
-
-                if isinstance(result, list) and result and "src" in result[0]:
-                    url = "https://telegra.ph" + result[0]["src"]
-                    logging.info(f"Telegraph'ga muvaffaqiyatli yuklandi: {url}")
-                    return url
+                text = (await resp.text()).strip()
+                if resp.status == 200 and text.startswith("https://"):
+                    logging.info(f"Catbox'ga muvaffaqiyatli yuklandi: {text}")
+                    return text
                 else:
-                    logging.error(f"Telegraph kutilmagan javob qaytardi: {raw_text}")
+                    logging.error(f"Catbox javob berdi status={resp.status}: {text}")
     except Exception:
-        logging.exception("Telegraph'ga poster yuklashda xato:")
+        logging.exception("Rasmni yuklashda xato:")
     return None
 
 
@@ -541,11 +534,11 @@ async def fixposter_command(message: types.Message):
         await message.answer("❌ Bu kod uchun saqlangan poster topilmadi (avval rasm yuklashingiz kerak).")
         return
 
-    await message.answer("⏳ Telegraph'ga qayta yuklanmoqda...")
+    await message.answer("⏳ Qayta yuklanmoqda...")
     poster_url = await upload_poster_to_telegraph(photo_file_id)
 
     if not poster_url:
-        await message.answer("❌ Telegraph'ga yuklab bo'lmadi. Railway loglarini tekshiring (aniq xato u yerda ko'rinadi).")
+        await message.answer("❌ Yuklab bo'lmadi. Railway loglarini tekshiring (aniq xato u yerda ko'rinadi).")
         return
 
     if is_series:
