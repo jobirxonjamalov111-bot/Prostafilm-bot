@@ -25,6 +25,7 @@ logging.basicConfig(
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+BOT_USERNAME = None  # main() ichida to'ldiriladi
 
 
 def init_db():
@@ -56,6 +57,20 @@ def init_db():
             photo_file_id TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stats (
+            code TEXT PRIMARY KEY,
+            downloads INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
+    # Eski bazalarda "description" / "poster_file_id" ustunlari bo'lmasligi mumkin — migratsiya
+    existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(movies)").fetchall()]
+    if "description" not in existing_columns:
+        conn.execute("ALTER TABLE movies ADD COLUMN description TEXT")
+    if "poster_file_id" not in existing_columns:
+        conn.execute("ALTER TABLE movies ADD COLUMN poster_file_id TEXT")
+
     conn.commit()
     conn.close()
 
@@ -139,11 +154,33 @@ def get_series_info(series_code: str) -> tuple[str, str] | None:
     return row if row else None
 
 
-def save_movie(code: str, message_id: int):
+def increment_downloads(code: str):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT OR REPLACE INTO movies (code, message_id) VALUES (?, ?)",
-        (code, message_id)
+        "INSERT INTO stats (code, downloads) VALUES (?, 1) "
+        "ON CONFLICT(code) DO UPDATE SET downloads = downloads + 1",
+        (code,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_downloads(code: str) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT downloads FROM stats WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+def save_movie(code: str, message_id: int, description: str | None = None):
+    conn = sqlite3.connect(DB_PATH)
+    if description is None:
+        # Faqat message_id yangilanmoqchi bo'lsa, mavjud tavsifni saqlab qolamiz
+        existing = conn.execute("SELECT description FROM movies WHERE code = ?", (code,)).fetchone()
+        description = existing[0] if existing else None
+    conn.execute(
+        "INSERT OR REPLACE INTO movies (code, message_id, description) VALUES (?, ?, ?)",
+        (code, message_id, description)
     )
     conn.commit()
     conn.close()
@@ -158,9 +195,50 @@ def get_movie(code: str) -> int | None:
     return row[0] if row else None
 
 
+def set_movie_poster(code: str, poster_file_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE movies SET poster_file_id = ? WHERE code = ?", (poster_file_id, code))
+    conn.commit()
+    conn.close()
+
+
+def get_movie_poster(code: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT poster_file_id FROM movies WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def get_movie_title(code: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT description FROM movies WHERE code = ?", (code,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def search_content(query: str) -> list[tuple[str, str, str]]:
+    """Nom bo'yicha qidiradi. [(code, title, 'movie'|'series'), ...] qaytaradi."""
+    like_query = f"%{query}%"
+    conn = sqlite3.connect(DB_PATH)
+    movie_rows = conn.execute(
+        "SELECT code, description FROM movies WHERE description LIKE ?", (like_query,)
+    ).fetchall()
+    series_rows = conn.execute(
+        "SELECT series_code, description FROM series_info WHERE description LIKE ?", (like_query,)
+    ).fetchall()
+    conn.close()
+
+    results = [(code, desc, "movie") for code, desc in movie_rows if desc]
+    results += [(code, desc, "series") for code, desc in series_rows if desc]
+    return results
+
+
 class UploadMovie(StatesGroup):
     waiting_for_code = State()
     waiting_for_description = State()
+    waiting_for_poster = State()
 
 
 class BroadcastPost(StatesGroup):
@@ -200,6 +278,16 @@ async def start_command(message: types.Message):
             )
         except Exception:
             logging.exception("Adminga xabar yuborishda xato:")
+
+    # Deep-link orqali kelgan bo'lsa (masalan inline natijadan): /start code_33
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1 and parts[1].startswith("code_"):
+        code = parts[1][len("code_"):]
+        delivered = await deliver_series_post(message.chat.id, code)
+        if not delivered:
+            delivered = await deliver_movie(message.chat.id, code)
+        if delivered:
+            return
 
     await message.answer("🎬Assalomu alekum Prosta |film  , 🍿botimizga Xush kelibsiz! Kino kodini yuboring 👇 (masalan: 123)")
 
@@ -437,6 +525,7 @@ async def process_edit_description(message: types.Message, state: FSMContext):
                 message_id=message_id,
                 caption=new_caption
             )
+            save_movie(code, message_id, message.text)
             await message.answer("✅ Tavsif muvaffaqiyatli yangilandi!")
         except Exception:
             logging.exception("Caption yangilashda xato:")
@@ -524,17 +613,29 @@ async def process_code(message: types.Message, state: FSMContext):
     await state.set_state(UploadMovie.waiting_for_description)
 
 
-# 3. Tavsifni qabul qilish, kanalga yuborish va bazaga yozish
+# 3. Tavsifni qabul qilish, so'ng poster so'rash
 @dp.message(UploadMovie.waiting_for_description)
 async def process_description(message: types.Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ Iltimos, matn ko'rinishida tavsif yuboring!")
         return
 
+    await state.update_data(description=message.text)
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="movie_skip_poster"))
+    await message.answer(
+        "🖼 Kino uchun poster (rasm) yuboring (o'zgartirmoqchi bo'lmasangiz, o'tkazib yuboring):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(UploadMovie.waiting_for_poster)
+
+
+async def finalize_movie_upload(chat_id: int, state: FSMContext, poster_file_id: str | None):
     data = await state.get_data()
     video_id = data.get("video_file_id")
     code = data.get("code")
-    tavsif = message.text
+    tavsif = data.get("description")
 
     caption = f"🎬 {tavsif}\n\n🔑 Kino kodi: {code}"
 
@@ -544,61 +645,90 @@ async def process_description(message: types.Message, state: FSMContext):
             video=video_id,
             caption=caption
         )
-        save_movie(code, sent_msg.message_id)
-        await message.answer(f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
+        save_movie(code, sent_msg.message_id, tavsif)
+        if poster_file_id:
+            set_movie_poster(code, poster_file_id)
+        await bot.send_message(chat_id, f"🎉 Muvaffaqiyatli saqlandi! Kodi: {code}")
     except Exception:
         logging.exception("Kanalga video yuborishda xato:")
-        await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
+        await bot.send_message(chat_id, "⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
     finally:
         await state.clear()
 
 
-# 4. Kino/serial qidirish (foydalanuvchi uchun)
+# 3.1. Poster rasmi qabul qilinganda — yuklashni yakunlash
+@dp.message(UploadMovie.waiting_for_poster, F.photo)
+async def process_movie_poster(message: types.Message, state: FSMContext):
+    poster_file_id = message.photo[-1].file_id
+    await finalize_movie_upload(message.chat.id, state, poster_file_id)
+
+
+# 3.2. Posterni o'tkazib yuborish
+@dp.callback_query(F.data == "movie_skip_poster", UploadMovie.waiting_for_poster)
+async def skip_movie_poster(callback: types.CallbackQuery, state: FSMContext):
+    await finalize_movie_upload(callback.message.chat.id, state, None)
+    await callback.answer()
+
+
+@dp.message(UploadMovie.waiting_for_poster)
+async def process_movie_poster_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, rasm yuboring yoki yuqoridagi \"O'tkazib yuborish\" tugmasini bosing.")
+
+
+# 4. Kino/serial qidirish (foydalanuvchi uchun) — kod orqali
 @dp.message(F.text.isdigit())
 async def get_movie_handler(message: types.Message):
     code = message.text
-    episodes = get_episodes(code)
-
-    if episodes:
-        # Serial topildi — qismlar tugmalarini tayyorlaymiz
-        builder = InlineKeyboardBuilder()
-        for episode_number, _ in episodes:
-            builder.add(types.InlineKeyboardButton(
-                text=f"{episode_number}-qism",
-                callback_data=f"ep:{code}:{episode_number}"
-            ))
-        builder.adjust(3)
-
-        info = get_series_info(code)
-        if info:
-            description, photo_file_id = info
-            caption = f"{description}\n\n🔑 Serial kodi: {code}"
-            if photo_file_id:
-                await message.answer_photo(
-                    photo=photo_file_id,
-                    caption=caption,
-                    reply_markup=builder.as_markup()
-                )
-            else:
-                await message.answer(caption, reply_markup=builder.as_markup())
-        else:
-            await message.answer("📺 Serial topildi! Qismni tanlang:", reply_markup=builder.as_markup())
+    delivered = await deliver_series_post(message.chat.id, code)
+    if delivered:
         return
 
+    delivered = await deliver_movie(message.chat.id, code)
+    if not delivered:
+        await message.answer("❌ Bunday kodli kino topilmadi!")
+
+
+async def deliver_series_post(chat_id: int, code: str) -> bool:
+    """Agar bu kodda serial bo'lsa, poster+tavsif+tugmalarni yuboradi va True qaytaradi."""
+    episodes = get_episodes(code)
+    if not episodes:
+        return False
+
+    increment_downloads(code)
+
+    builder = InlineKeyboardBuilder()
+    for episode_number, _ in episodes:
+        builder.add(types.InlineKeyboardButton(
+            text=f"{episode_number}-qism",
+            callback_data=f"ep:{code}:{episode_number}"
+        ))
+    builder.adjust(3)
+
+    info = get_series_info(code)
+    if info:
+        description, photo_file_id = info
+        caption = f"{description}\n\n🔑 Serial kodi: {code}"
+        if photo_file_id:
+            await bot.send_photo(chat_id, photo=photo_file_id, caption=caption, reply_markup=builder.as_markup())
+        else:
+            await bot.send_message(chat_id, caption, reply_markup=builder.as_markup())
+    else:
+        await bot.send_message(chat_id, "📺 Serial topildi! Qismni tanlang:", reply_markup=builder.as_markup())
+    return True
+
+
+async def deliver_movie(chat_id: int, code: str) -> bool:
+    """Agar bu kodda oddiy kino bo'lsa, yuboradi va True qaytaradi."""
     message_id = get_movie(code)
     if not message_id:
-        await message.answer("❌ Bunday kodli kino topilmadi!")
-        return
+        return False
 
     try:
-        await bot.copy_message(
-            chat_id=message.chat.id,
-            from_chat_id=CHANNEL_ID,
-            message_id=message_id
-        )
+        await bot.copy_message(chat_id=chat_id, from_chat_id=CHANNEL_ID, message_id=message_id)
+        increment_downloads(code)
     except Exception:
         logging.exception("Kino yuborishda xato:")
-        await message.answer("❌ Kinoni yuborib bo'lmadi, keyinroq urinib ko'ring.")
+    return True
 
 
 # 4.1. Serial qismini tanlaganda yuborish
@@ -628,14 +758,101 @@ async def send_episode(callback: types.CallbackQuery):
         await callback.answer("❌ Yuborib bo'lmadi, keyinroq urinib ko'ring.", show_alert=True)
 
 
+# 4.2. Nom bo'yicha qidiruv (kod emas, oddiy matn kiritilganda)
+@dp.message(F.text)
+async def search_by_name(message: types.Message):
+    query = message.text.strip()
+    if not query or query.startswith("/"):
+        return
+
+    results = search_content(query)
+    if not results:
+        await message.answer("❌ Hech narsa topilmadi. Kod yoki kino/serial nomini kiriting.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for code, title, kind in results[:10]:
+        icon = "📺" if kind == "series" else "🎬"
+        short_title = title.split("\n")[0][:35]
+        builder.add(types.InlineKeyboardButton(
+            text=f"{icon} {short_title}",
+            callback_data=f"pick:{kind}:{code}"
+        ))
+    builder.adjust(1)
+    await message.answer("🔍 Natijalar:", reply_markup=builder.as_markup())
+
+
+# 4.3. Qidiruv natijasidan birini tanlaganda yuborish
+@dp.callback_query(F.data.startswith("pick:"))
+async def pick_search_result(callback: types.CallbackQuery):
+    _, kind, code = callback.data.split(":")
+
+    if kind == "series":
+        await deliver_series_post(callback.message.chat.id, code)
+    else:
+        await deliver_movie(callback.message.chat.id, code)
+    await callback.answer()
+
+
 # 5. Boshqa hech qaysi handlerga mos kelmagan xabarlar uchun
 @dp.message()
 async def fallback_handler(message: types.Message):
     await message.answer("❗ Iltimos, kino kodini raqam bilan yuboring yoki /start bosing.")
 
 
+# 6. Inline qidiruv — foydalanuvchi istalgan chatda "@bot_username so'rov" yozganda
+@dp.inline_query()
+async def inline_search(inline_query: types.InlineQuery):
+    query = inline_query.query.strip()
+    if not query:
+        await inline_query.answer([], cache_time=1, is_personal=True)
+        return
+
+    results = search_content(query)[:20]
+    items = []
+
+    for code, title, kind in results:
+        downloads = get_downloads(code)
+        short_title = title.split("\n")[0][:60]
+        description_line = f"⬇️ Yuklashlar: {downloads}"
+
+        poster_file_id = get_movie_poster(code) if kind == "movie" else (get_series_info(code) or (None, None))[1]
+
+        builder = InlineKeyboardBuilder()
+        label = "🎬 Kinoni olish" if kind == "movie" else "📺 Barcha qismlarni ko'rish"
+        builder.add(types.InlineKeyboardButton(
+            text=label,
+            url=f"https://t.me/{BOT_USERNAME}?start=code_{code}"
+        ))
+
+        caption = f"{title}\n\n🔑 Kodi: {code}"
+
+        if poster_file_id:
+            items.append(types.InlineQueryResultCachedPhoto(
+                id=f"{kind}:{code}",
+                photo_file_id=poster_file_id,
+                title=short_title,
+                description=description_line,
+                caption=caption,
+                reply_markup=builder.as_markup()
+            ))
+        else:
+            items.append(types.InlineQueryResultArticle(
+                id=f"{kind}:{code}",
+                title=short_title,
+                description=description_line,
+                input_message_content=types.InputTextMessageContent(message_text=caption),
+                reply_markup=builder.as_markup()
+            ))
+
+    await inline_query.answer(items, cache_time=5, is_personal=False)
+
+
 async def main():
+    global BOT_USERNAME
     init_db()
+    me = await bot.get_me()
+    BOT_USERNAME = me.username
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Bot ishga tushdi...")
     await dp.start_polling(bot)
