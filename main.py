@@ -236,6 +236,18 @@ def get_movie_title(code: str) -> str | None:
     return row[0] if row and row[0] else None
 
 
+def get_all_content() -> list[tuple[str, str, str]]:
+    """Barcha kino va seriallarni [(code, title, kind), ...] ko'rinishida qaytaradi."""
+    conn = sqlite3.connect(DB_PATH)
+    movie_rows = conn.execute("SELECT code, description FROM movies WHERE description IS NOT NULL").fetchall()
+    series_rows = conn.execute("SELECT series_code, description FROM series_info WHERE description IS NOT NULL").fetchall()
+    conn.close()
+
+    results = [(code, desc, "movie") for code, desc in movie_rows if desc]
+    results += [(code, desc, "series") for code, desc in series_rows if desc]
+    return results
+
+
 def search_content(query: str) -> list[tuple[str, str, str]]:
     """Nom bo'yicha qidiradi. [(code, title, 'movie'|'series'), ...] qaytaradi."""
     like_query = f"%{query}%"
@@ -305,7 +317,7 @@ def set_setting(key: str, value: str):
 
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", callback_data="menu:search"))
+    builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", switch_inline_query_current_chat=""))
     builder.add(types.InlineKeyboardButton(text="❓ Yordam", callback_data="menu:help"))
     builder.add(types.InlineKeyboardButton(text="🎬 Kino buyurtma berish", callback_data="menu:order"))
     builder.add(types.InlineKeyboardButton(text="👤 Profilim", callback_data="menu:profile"))
@@ -807,13 +819,6 @@ async def process_movie_poster_wrong(message: types.Message):
 
 
 # 4. Asosiy menyu tugmalari (inline)
-@dp.callback_query(F.data == "menu:search")
-async def menu_search(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "🔎 Kino yoki serial kodini (masalan: 123) yoki nomini (masalan: Yunus Emre) yozing:",
-        reply_markup=types.ForceReply(input_field_placeholder="🔍 Nomi yoki kodini yozing...")
-    )
-    await callback.answer()
 
 
 @dp.callback_query(F.data == "menu:help")
@@ -1009,11 +1014,13 @@ async def fallback_handler(message: types.Message):
 @dp.inline_query()
 async def inline_search(inline_query: types.InlineQuery):
     query = inline_query.query.strip()
-    if not query:
-        await inline_query.answer([], cache_time=1, is_personal=True)
-        return
 
-    results = search_content(query)[:20]
+    if not query:
+        # Hech narsa yozilmagan bo'lsa ham — eng ko'p yuklangan kinolarni ko'rsatamiz
+        all_content = get_all_content()
+        results = sorted(all_content, key=lambda item: get_downloads(item[0]), reverse=True)[:15]
+    else:
+        results = search_content(query)[:20]
     items = []
 
     for code, title, kind in results:
