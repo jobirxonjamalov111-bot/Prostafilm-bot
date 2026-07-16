@@ -700,6 +700,7 @@ async def addbutton_forward(message: types.Message, state: FSMContext):
         await message.answer("❌ Iltimos, kanal postini forward qiling (oddiy xabar emas).")
         return
 
+    origin_chat_id = origin.chat.id
     origin_message_id = origin.message_id
 
     builder = InlineKeyboardBuilder()
@@ -710,7 +711,7 @@ async def addbutton_forward(message: types.Message, state: FSMContext):
 
     try:
         await bot.edit_message_reply_markup(
-            chat_id=CHANNEL_ID,
+            chat_id=origin_chat_id,
             message_id=origin_message_id,
             reply_markup=builder.as_markup()
         )
