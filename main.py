@@ -356,6 +356,11 @@ class SettingsUpdate(StatesGroup):
     waiting_for_welcome_text = State()
 
 
+class AddButton(StatesGroup):
+    waiting_for_code = State()
+    waiting_for_forward = State()
+
+
 async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
     """Posterni ImgBB'ga yuklab, ochiq URL qaytaradi (xato bo'lsa None)."""
     if not IMGBB_API_KEY:
@@ -656,6 +661,67 @@ async def fixvideo_command(message: types.Message):
     except Exception:
         logging.exception("Video ma'lumotini tiklashda xato:")
         await message.answer("⚠️ Xatolik yuz berdi, Railway loglarini tekshiring.")
+
+
+# 0.2.6. Admin uchun — mavjud kanal postiga "Tomosha qilish" tugmasini qo'shish
+@dp.message(Command("addbutton"))
+async def addbutton_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer(
+        "🔑 Bu post qaysi kino yoki serial kodiga tegishli? Kodni yozing "
+        "(bu kod botda avval ro'yxatdan o'tgan bo'lishi kerak):"
+    )
+    await state.set_state(AddButton.waiting_for_code)
+
+
+@dp.message(AddButton.waiting_for_code)
+async def addbutton_code(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqam kiriting!")
+        return
+
+    await state.update_data(code=message.text)
+    await message.answer(
+        "📩 Endi kanaldagi shu postni menga FORWARD qiling "
+        "(kanaldagi xabarni ushlab turib \"Forward\" tugmasini bosing):"
+    )
+    await state.set_state(AddButton.waiting_for_forward)
+
+
+@dp.message(AddButton.waiting_for_forward)
+async def addbutton_forward(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+
+    origin = message.forward_origin
+    if not origin or getattr(origin, "type", None) != "channel":
+        await message.answer("❌ Iltimos, kanal postini forward qiling (oddiy xabar emas).")
+        return
+
+    origin_message_id = origin.message_id
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(
+        text="🎬 Tomosha qilish",
+        url=f"https://t.me/{BOT_USERNAME}?start=code_{code}"
+    ))
+
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=CHANNEL_ID,
+            message_id=origin_message_id,
+            reply_markup=builder.as_markup()
+        )
+        await message.answer("✅ Tugma muvaffaqiyatli qo'shildi! Kanalga o'tib tekshiring.")
+    except Exception:
+        logging.exception("Tugma qo'shishda xato:")
+        await message.answer(
+            "⚠️ Xatolik yuz berdi. Bot kanalda \"Edit messages\" huquqiga "
+            "ega ekanligini tekshiring (Kanal → Administrators → bot → Edit Messages)."
+        )
+    await state.clear()
 
 
 # 0.2.1. Admin uchun — welcome banner rasmini sozlash
