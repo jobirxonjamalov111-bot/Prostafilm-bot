@@ -481,7 +481,7 @@ async def check_subscription_callback(callback: types.CallbackQuery):
 
 
 DEFAULT_WELCOME_TEXT = (
-    "🎬 Assalomu alaykum! PROSTAFILM — Eng sara kinolar bazasi. 🍿\n\n"
+    "🎬 Assalomu alekum! PROSTAFILM — Eng sara kinolar bazasi. 🍿\n\n"
     "Istalgan filmni soniyalar ichida toping. Qidiruvni boshlash uchun kino nomini yoki kodini yozib yuboring\n\n"
     " Yoki Pastdagi tugmalardan foydalaning👇:"
 )
