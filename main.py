@@ -426,7 +426,7 @@ def get_subscribe_keyboard():
     for channel in MANDATORY_CHANNELS:
         builder.add(types.InlineKeyboardButton(
             text=f"➡️ {channel}",
-            url=f"https://t.me/{channel.replace('@prostafilm', '')}"
+            url=f"https://t.me/{channel.replace('@', '')}"
         ))
     builder.add(types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_subscription"))
     builder.adjust(1)
@@ -466,7 +466,7 @@ async def start_command(message: types.Message):
     # Majburiy obuna tekshiruvi (adminga tegishli emas)
     if message.from_user.id != ADMIN_ID and not await check_subscription(message.from_user.id):
         await message.answer(
-            "⚠️ Botdan foydalanish uchun quyidagi kanallarga a'zo bo'ling, "
+            "⚠️ Botdan foydalanish uchun quyidagi kanal(lar)ga a'zo bo'ling, "
             "so'ng \"✅ Tekshirish\" tugmasini bosing:",
             reply_markup=get_subscribe_keyboard()
         )
@@ -618,6 +618,44 @@ async def fixposter_command(message: types.Message):
         set_movie_poster(code, photo_file_id, poster_url)
 
     await message.answer(f"✅ Muvaffaqiyatli! Yangi URL: {poster_url}")
+
+
+# 0.2.5. Admin uchun — eski kinolarda video_file_id'ni tiklash (qayta yuklamasdan)
+@dp.message(Command("fixvideo"))
+async def fixvideo_command(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer("Foydalanish: /fixvideo <kod>\nMasalan: /fixvideo 100")
+        return
+
+    code = parts[1].strip()
+    channel_message_id = get_movie(code)
+
+    if not channel_message_id:
+        await message.answer("❌ Bu kodli kino topilmadi.")
+        return
+
+    await message.answer("⏳ Video ma'lumoti tiklanmoqda...")
+
+    try:
+        fwd = await bot.forward_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=CHANNEL_ID,
+            message_id=channel_message_id
+        )
+        if not fwd.video:
+            await message.answer("❌ Bu xabarda video topilmadi.")
+            return
+
+        save_movie(code, channel_message_id, None, fwd.video.file_id)
+        await bot.delete_message(ADMIN_ID, fwd.message_id)
+        await message.answer(f"✅ Muvaffaqiyatli! Endi bu kino inline qidiruvda to'g'ridan-to'g'ri yuboriladi.")
+    except Exception:
+        logging.exception("Video ma'lumotini tiklashda xato:")
+        await message.answer("⚠️ Xatolik yuz berdi, Railway loglarini tekshiring.")
 
 
 # 0.2.1. Admin uchun — welcome banner rasmini sozlash
