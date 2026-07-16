@@ -501,12 +501,6 @@ DEFAULT_WELCOME_TEXT = (
 )
 
 
-def get_persistent_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="🔍 Qidirish"))
-    return builder.as_markup(resize_keyboard=True)
-
-
 async def send_welcome(chat_id: int):
     banner = get_setting("welcome_photo_file_id")
     text = get_setting("welcome_text") or DEFAULT_WELCOME_TEXT
@@ -526,21 +520,6 @@ async def send_welcome(chat_id: int):
             parse_mode="HTML",
             reply_markup=get_main_keyboard()
         )
-
-    # Doimiy pastki panel — suhbatni aylantirganda ham ko'rinib turadi
-    await bot.send_message(
-        chat_id,
-        "👇 Har doim shu joydan qidirishingiz mumkin",
-        reply_markup=get_persistent_keyboard()
-    )
-
-
-@dp.message(F.text == "🔍 Qidirish")
-async def persistent_search_button(message: types.Message):
-    await message.answer(
-        "🔎 Kino yoki serial kodini yoki nomini yozing:",
-        reply_markup=types.ForceReply(input_field_placeholder="🔍 Nomi yoki kodini yozing...")
-    )
 
 
 # 0.1. Admin uchun ommaviy xabar (broadcast) yuborish
