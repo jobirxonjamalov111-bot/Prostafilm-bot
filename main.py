@@ -466,7 +466,7 @@ async def start_command(message: types.Message):
     # Majburiy obuna tekshiruvi (adminga tegishli emas)
     if message.from_user.id != ADMIN_ID and not await check_subscription(message.from_user.id):
         await message.answer(
-            "⚠️ Botdan foydalanish uchun quyidagi kanal(lar)ga a'zo bo'ling, "
+            "⚠️ Botdan foydalanish uchun quyidagi kanallarga a'zo bo'ling, "
             "so'ng \"✅ Tekshirish\" tugmasini bosing:",
             reply_markup=get_subscribe_keyboard()
         )
