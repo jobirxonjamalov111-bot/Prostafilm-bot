@@ -89,6 +89,8 @@ def init_db():
         conn.execute("ALTER TABLE movies ADD COLUMN poster_file_id TEXT")
     if "poster_url" not in existing_columns:
         conn.execute("ALTER TABLE movies ADD COLUMN poster_url TEXT")
+    if "video_file_id" not in existing_columns:
+        conn.execute("ALTER TABLE movies ADD COLUMN video_file_id TEXT")
 
     series_columns = [row[1] for row in conn.execute("PRAGMA table_info(series_info)").fetchall()]
     if "poster_url" not in series_columns:
@@ -221,18 +223,30 @@ def get_downloads(code: str) -> int:
     return real_count + get_download_baseline()
 
 
-def save_movie(code: str, message_id: int, description: str | None = None):
+def save_movie(code: str, message_id: int, description: str | None = None, video_file_id: str | None = None):
     conn = sqlite3.connect(DB_PATH)
-    if description is None:
-        # Faqat message_id yangilanmoqchi bo'lsa, mavjud tavsifni saqlab qolamiz
-        existing = conn.execute("SELECT description FROM movies WHERE code = ?", (code,)).fetchone()
-        description = existing[0] if existing else None
+    existing = conn.execute(
+        "SELECT description, poster_file_id, poster_url, video_file_id FROM movies WHERE code = ?", (code,)
+    ).fetchone()
+    old_description, old_poster_file_id, old_poster_url, old_video_file_id = existing if existing else (None, None, None, None)
+
+    final_description = description if description is not None else old_description
+    final_video_file_id = video_file_id if video_file_id is not None else old_video_file_id
+
     conn.execute(
-        "INSERT OR REPLACE INTO movies (code, message_id, description) VALUES (?, ?, ?)",
-        (code, message_id, description)
+        "INSERT OR REPLACE INTO movies (code, message_id, description, poster_file_id, poster_url, video_file_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (code, message_id, final_description, old_poster_file_id, old_poster_url, final_video_file_id)
     )
     conn.commit()
     conn.close()
+
+
+def get_movie_video_file_id(code: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT video_file_id FROM movies WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 
 def get_movie(code: str) -> int | None:
@@ -887,6 +901,7 @@ async def process_edit_movie_video(message: types.Message, state: FSMContext):
             message_id=message_id,
             media=types.InputMediaVideo(media=message.video.file_id, caption=caption)
         )
+        save_movie(code, message_id, description, message.video.file_id)
         await message.answer("✅ Video muvaffaqiyatli almashtirildi!")
     except Exception:
         logging.exception("Videoni almashtirishda xato:")
@@ -1126,7 +1141,7 @@ async def finalize_movie_upload(chat_id: int, state: FSMContext, poster_file_id:
             video=video_id,
             caption=caption
         )
-        save_movie(code, sent_msg.message_id, tavsif)
+        save_movie(code, sent_msg.message_id, tavsif, video_id)
         if poster_file_id:
             poster_url = await upload_poster_to_telegraph(poster_file_id)
             set_movie_poster(code, poster_file_id, poster_url)
@@ -1312,14 +1327,17 @@ async def send_episode(callback: types.CallbackQuery):
 
     try:
         await bot.copy_message(
-            chat_id=callback.message.chat.id,
+            chat_id=callback.from_user.id,
             from_chat_id=CHANNEL_ID,
             message_id=message_id
         )
         await callback.answer()
     except Exception:
         logging.exception("Serial qismini yuborishda xato:")
-        await callback.answer("❌ Yuborib bo'lmadi, keyinroq urinib ko'ring.", show_alert=True)
+        await callback.answer(
+            "❌ Yuborib bo'lmadi. Avval botga /start yozib, so'ng qayta urinib ko'ring.",
+            show_alert=True
+        )
 
 
 # 4.2. Nom bo'yicha qidiruv (kod emas, oddiy matn kiritilganda)
@@ -1356,9 +1374,9 @@ async def pick_search_result(callback: types.CallbackQuery):
     _, kind, code = callback.data.split(":")
 
     if kind == "series":
-        await deliver_series_post(callback.message.chat.id, code)
+        await deliver_series_post(callback.from_user.id, code)
     else:
-        await deliver_movie(callback.message.chat.id, code)
+        await deliver_movie(callback.from_user.id, code)
     await callback.answer()
 
 
@@ -1387,16 +1405,36 @@ async def inline_search(inline_query: types.InlineQuery):
         downloads = get_downloads(code)
         short_title = title.split("\n")[0][:60]
         description_line = f"⬇️ Yuklashlar: {downloads}"
+        caption = f"{title}\n\n🔑 Kodi: {code}"
 
-        poster_url = get_movie_poster_url(code) if kind == "movie" else get_series_poster_url(code)
-
-        builder = InlineKeyboardBuilder()
         if kind == "movie":
-            builder.add(types.InlineKeyboardButton(
-                text="🎬 Kinoni olish",
-                callback_data=f"pick:movie:{code}"
+            video_file_id = get_movie_video_file_id(code)
+            if video_file_id:
+                # Video faylining o'zi natija sifatida — bitta bosishda darhol yuboriladi
+                items.append(types.InlineQueryResultCachedVideo(
+                    id=f"movie:{code}",
+                    video_file_id=video_file_id,
+                    title=short_title,
+                    description=description_line,
+                    caption=caption
+                ))
+                continue
+
+            # Eski kinolarda video_file_id saqlanmagan bo'lishi mumkin — tugma bilan zaxira variant
+            poster_url = get_movie_poster_url(code)
+            builder = InlineKeyboardBuilder()
+            builder.add(types.InlineKeyboardButton(text="🎬 Kinoni olish", callback_data=f"pick:movie:{code}"))
+            items.append(types.InlineQueryResultArticle(
+                id=f"movie:{code}",
+                title=short_title,
+                description=description_line,
+                thumbnail_url=poster_url if poster_url else None,
+                input_message_content=types.InputTextMessageContent(message_text=caption),
+                reply_markup=builder.as_markup()
             ))
         else:
+            poster_url = get_series_poster_url(code)
+            builder = InlineKeyboardBuilder()
             episodes = get_episodes(code)
             for episode_number, _ in episodes:
                 builder.add(types.InlineKeyboardButton(
@@ -1405,18 +1443,28 @@ async def inline_search(inline_query: types.InlineQuery):
                 ))
             builder.adjust(3)
 
-        caption = f"{title}\n\n🔑 Kodi: {code}"
-
-        items.append(types.InlineQueryResultArticle(
-            id=f"{kind}:{code}",
-            title=short_title,
-            description=description_line,
-            thumbnail_url=poster_url if poster_url else None,
-            input_message_content=types.InputTextMessageContent(message_text=caption),
-            reply_markup=builder.as_markup()
-        ))
+            items.append(types.InlineQueryResultArticle(
+                id=f"series:{code}",
+                title=short_title,
+                description=description_line,
+                thumbnail_url=poster_url if poster_url else None,
+                input_message_content=types.InputTextMessageContent(message_text=caption),
+                reply_markup=builder.as_markup()
+            ))
 
     await inline_query.answer(items, cache_time=5, is_personal=False)
+
+
+@dp.chosen_inline_result()
+async def track_chosen_result(chosen: types.ChosenInlineResult):
+    # result_id "movie:<code>" ko'rinishida — video to'g'ridan-to'g'ri yuborilgani uchun
+    # bu yerda hisoblaymiz (Article natijalar esa tugma bosilganda o'zi hisoblanadi)
+    try:
+        kind, code = chosen.result_id.split(":", 1)
+        if kind == "movie":
+            increment_downloads(code)
+    except Exception:
+        pass
 
 
 async def main():
