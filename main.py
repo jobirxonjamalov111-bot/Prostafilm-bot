@@ -466,7 +466,7 @@ async def start_command(message: types.Message):
     # Majburiy obuna tekshiruvi (adminga tegishli emas)
     if message.from_user.id != ADMIN_ID and not await check_subscription(message.from_user.id):
         await message.answer(
-            "⚠️ Botdan foydalanish uchun quyidagi kanallarga a'zo bo'ling, "
+            "⚠️ Botdan foydalanish uchun quyidagi kanal(lar)ga a'zo bo'ling, "
             "so'ng \"✅ Tekshirish\" tugmasini bosing:",
             reply_markup=get_subscribe_keyboard()
         )
@@ -1313,6 +1313,14 @@ async def deliver_series_post(chat_id: int, code: str) -> bool:
     return True
 
 
+def get_extra_buttons(code: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=code))
+    builder.add(types.InlineKeyboardButton(text="🔍 Yana qidirish", switch_inline_query_current_chat=""))
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 async def deliver_movie(chat_id: int, code: str) -> bool:
     """Agar bu kodda oddiy kino bo'lsa, yuboradi va True qaytaradi."""
     message_id = get_movie(code)
@@ -1320,7 +1328,12 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
         return False
 
     try:
-        await bot.copy_message(chat_id=chat_id, from_chat_id=CHANNEL_ID, message_id=message_id)
+        await bot.copy_message(
+            chat_id=chat_id,
+            from_chat_id=CHANNEL_ID,
+            message_id=message_id,
+            reply_markup=get_extra_buttons(code)
+        )
         increment_downloads(code)
     except Exception:
         logging.exception("Kino yuborishda xato:")
@@ -1343,11 +1356,22 @@ async def send_episode(callback: types.CallbackQuery):
         return
 
     try:
+        # Chiroyliroq ko'rinishi uchun avval serial posterini yuboramiz (agar mavjud bo'lsa)
+        info = get_series_info(series_code)
+        if info and info[1]:
+            await bot.send_photo(
+                chat_id=callback.from_user.id,
+                photo=info[1],
+                caption=f"📺 {episode_number}-qism"
+            )
+
         await bot.copy_message(
             chat_id=callback.from_user.id,
             from_chat_id=CHANNEL_ID,
-            message_id=message_id
+            message_id=message_id,
+            reply_markup=get_extra_buttons(series_code)
         )
+        increment_downloads(series_code)
         await callback.answer()
     except Exception:
         logging.exception("Serial qismini yuborishda xato:")
@@ -1433,7 +1457,8 @@ async def inline_search(inline_query: types.InlineQuery):
                     video_file_id=video_file_id,
                     title=short_title,
                     description=description_line,
-                    caption=caption
+                    caption=caption,
+                    reply_markup=get_extra_buttons(code)
                 ))
                 continue
 
