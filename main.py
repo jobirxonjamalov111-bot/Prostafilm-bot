@@ -20,6 +20,11 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # qayta deployda baza yana o'chib ketadi
 DB_PATH = os.getenv("DB_PATH", "/data/movies.db")
 
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY", "")
+
+# Majburiy obuna kanallari, vergul bilan ajratilgan: @kanal1,@kanal2
+MANDATORY_CHANNELS = [c.strip() for c in os.getenv("MANDATORY_CHANNELS", "").split(",") if c.strip()]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -338,7 +343,11 @@ class SettingsUpdate(StatesGroup):
 
 
 async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
-    """Posterni Catbox.moe'ga yuklab, ochiq URL qaytaradi (xato bo'lsa None)."""
+    """Posterni ImgBB'ga yuklab, ochiq URL qaytaradi (xato bo'lsa None)."""
+    if not IMGBB_API_KEY:
+        logging.warning("IMGBB_API_KEY sozlanmagan — poster yuklanmaydi.")
+        return None
+
     try:
         file = await bot.get_file(photo_file_id)
         file_bytes_io = await bot.download_file(file.file_path)
@@ -346,19 +355,20 @@ async def upload_poster_to_telegraph(photo_file_id: str) -> str | None:
 
         async with aiohttp.ClientSession() as session:
             form = aiohttp.FormData()
-            form.add_field("reqtype", "fileupload")
-            form.add_field("fileToUpload", data, filename="poster.jpg")
+            form.add_field("key", IMGBB_API_KEY)
+            form.add_field("image", data, filename="poster.jpg", content_type="image/jpeg")
             async with session.post(
-                "https://catbox.moe/user/api.php",
+                "https://api.imgbb.com/1/upload",
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=20)
             ) as resp:
-                text = (await resp.text()).strip()
-                if resp.status == 200 and text.startswith("https://"):
-                    logging.info(f"Catbox'ga muvaffaqiyatli yuklandi: {text}")
-                    return text
+                result = await resp.json()
+                if resp.status == 200 and result.get("success"):
+                    url = result["data"]["url"]
+                    logging.info(f"ImgBB'ga muvaffaqiyatli yuklandi: {url}")
+                    return url
                 else:
-                    logging.error(f"Catbox javob berdi status={resp.status}: {text}")
+                    logging.error(f"ImgBB javob berdi: {result}")
     except Exception:
         logging.exception("Rasmni yuklashda xato:")
     return None
@@ -379,6 +389,34 @@ def set_setting(key: str, value: str):
     )
     conn.commit()
     conn.close()
+
+
+async def check_subscription(user_id: int) -> bool:
+    """Foydalanuvchi barcha majburiy kanallarga a'zo ekanini tekshiradi."""
+    if not MANDATORY_CHANNELS:
+        return True
+
+    for channel in MANDATORY_CHANNELS:
+        try:
+            member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
+            if member.status not in ("member", "administrator", "creator"):
+                return False
+        except Exception:
+            logging.exception(f"Obuna tekshirishda xato ({channel}):")
+            continue
+    return True
+
+
+def get_subscribe_keyboard():
+    builder = InlineKeyboardBuilder()
+    for channel in MANDATORY_CHANNELS:
+        builder.add(types.InlineKeyboardButton(
+            text=f"➡️ {channel}",
+            url=f"https://t.me/{channel.replace('@', '')}"
+        ))
+    builder.add(types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_subscription"))
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def get_main_keyboard():
@@ -411,6 +449,15 @@ async def start_command(message: types.Message):
         except Exception:
             logging.exception("Adminga xabar yuborishda xato:")
 
+    # Majburiy obuna tekshiruvi (adminga tegishli emas)
+    if message.from_user.id != ADMIN_ID and not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ Botdan foydalanish uchun quyidagi kanal(lar)ga a'zo bo'ling, "
+            "so'ng \"✅ Tekshirish\" tugmasini bosing:",
+            reply_markup=get_subscribe_keyboard()
+        )
+        return
+
     # Deep-link orqali kelgan bo'lsa (masalan inline natijadan): /start code_33
     parts = message.text.split(maxsplit=1)
     if len(parts) > 1 and parts[1].startswith("code_"):
@@ -424,10 +471,19 @@ async def start_command(message: types.Message):
     await send_welcome(message.chat.id)
 
 
+@dp.callback_query(F.data == "check_subscription")
+async def check_subscription_callback(callback: types.CallbackQuery):
+    if await check_subscription(callback.from_user.id):
+        await callback.message.delete()
+        await send_welcome(callback.message.chat.id)
+    else:
+        await callback.answer("❌ Siz hali hamma kanalga a'zo bo'lmadingiz!", show_alert=True)
+
+
 DEFAULT_WELCOME_TEXT = (
     "🎬 Assalomu alaykum! PROSTAFILM — Eng sara kinolar bazasi. 🍿\n\n"
     "Istalgan filmni soniyalar ichida toping. Qidiruvni boshlash uchun kino nomini yoki kodini yozib yuboring\n\n"
-    "Yoki 👇 Pastdagi tugmalardan foydalaning:"
+    " Yoki Pastdagi tugmalardan foydalaning👇:"
 )
 
 
@@ -702,7 +758,7 @@ async def finish_series(message: types.Message, state: FSMContext):
 # 0.7. Serial holatida video yoki /done bo'lmagan xabarlar uchun
 @dp.message(SeriesUpload.waiting_for_episode)
 async def series_wrong_content(message: types.Message):
-    await message.answer("❗ Iltimos, video yuboring yoki tugatish uchun /done yozing shepim")
+    await message.answer("❗ Iltimos, video yuboring yoki tugatish uchun /done yozing.")
 
 
 # 0.8. Mavjud kino/serialni tahrirlashni boshlash (faqat admin)
@@ -711,7 +767,7 @@ async def edit_command(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
 
-    await message.answer("✏️ Tahrirlamoqchi bo'lgan kino yoki serial kodini kiriting shepim:")
+    await message.answer("✏️ Tahrirlamoqchi bo'lgan kino yoki serial kodini kiriting:")
     await state.set_state(EditContent.waiting_for_code)
 
 
@@ -1088,9 +1144,9 @@ async def menu_help(callback: types.CallbackQuery):
     await callback.message.answer(
         "ℹ️ Botdan qanday foydalanish mumkin:\n\n"
         "1️⃣ Kino yoki serial kodini bilsangiz — shunchaki raqamni yuboring (masalan: 123)\n"
-        "2️⃣  Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Qasoskorlar)\n"
+        "2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Yunus Emre)\n"
         "3️⃣ Chiqqan natijalardan birini tanlang\n\n"
-        "Yordam kerak bo'lsa, @Tezrideadmin ga murojaat qiling"
+        "Yordam kerak bo'lsa, botni qayta ishga tushirish uchun /start ni bosing."
     )
     await callback.answer()
 
