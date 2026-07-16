@@ -462,7 +462,7 @@ def get_subscribe_keyboard():
     builder = InlineKeyboardBuilder()
     for channel in MANDATORY_CHANNELS:
         builder.add(types.InlineKeyboardButton(
-            text=f"➡️ {channel}",
+            text=f" ➡️ {MANDATORY_CHANNELS.index(channel) + 1}-kanal",
             url=f"https://t.me/{channel.replace('@', '')}"
         ))
     builder.add(types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_subscription"))
