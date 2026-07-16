@@ -96,6 +96,10 @@ def init_db():
     if "poster_url" not in series_columns:
         conn.execute("ALTER TABLE series_info ADD COLUMN poster_url TEXT")
 
+    episode_columns = [row[1] for row in conn.execute("PRAGMA table_info(episodes)").fetchall()]
+    if "video_file_id" not in episode_columns:
+        conn.execute("ALTER TABLE episodes ADD COLUMN video_file_id TEXT")
+
     conn.commit()
     conn.close()
 
@@ -134,11 +138,11 @@ def get_all_users() -> list[int]:
     return [row[0] for row in rows]
 
 
-def save_episode(series_code: str, episode_number: int, message_id: int):
+def save_episode(series_code: str, episode_number: int, message_id: int, video_file_id: str | None = None):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT OR REPLACE INTO episodes (series_code, episode_number, message_id) VALUES (?, ?, ?)",
-        (series_code, episode_number, message_id)
+        "INSERT OR REPLACE INTO episodes (series_code, episode_number, message_id, video_file_id) VALUES (?, ?, ?, ?)",
+        (series_code, episode_number, message_id, video_file_id)
     )
     conn.commit()
     conn.close()
@@ -163,6 +167,17 @@ def get_episode_message_id(series_code: str, episode_number: int) -> int | None:
     ).fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def get_episode_video_file_id(series_code: str, episode_number: int) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT video_file_id FROM episodes WHERE series_code = ? AND episode_number = ?",
+        (series_code, episode_number)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
 
 
 def save_series_info(series_code: str, description: str, photo_file_id: str | None, poster_url: str | None = None):
@@ -221,6 +236,23 @@ def get_downloads(code: str) -> int:
     conn.close()
     real_count = row[0] if row else 0
     return real_count + get_download_baseline()
+
+
+def delete_movie(code: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM movies WHERE code = ?", (code,))
+    conn.execute("DELETE FROM stats WHERE code = ?", (code,))
+    conn.commit()
+    conn.close()
+
+
+def delete_series(code: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM episodes WHERE series_code = ?", (code,))
+    conn.execute("DELETE FROM series_info WHERE series_code = ?", (code,))
+    conn.execute("DELETE FROM stats WHERE code = ?", (code,))
+    conn.commit()
+    conn.close()
 
 
 def save_movie(code: str, message_id: int, description: str | None = None, video_file_id: str | None = None):
@@ -844,7 +876,7 @@ async def process_series_episode(message: types.Message, state: FSMContext):
             video=message.video.file_id,
             caption=f"🎬 Serial kodi: {series_code}\n📺 {episode_number}-qism"
         )
-        save_episode(series_code, episode_number, sent_msg.message_id)
+        save_episode(series_code, episode_number, sent_msg.message_id, message.video.file_id)
         await message.answer(
             f"✅ {episode_number}-qism saqlandi!\n"
             f"Keyingi qismni yuboring yoki tugatish uchun /done yozing."
@@ -907,6 +939,7 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         builder.add(types.InlineKeyboardButton(text="📝 Tavsif/Poster", callback_data=f"edit_action:info:{code}"))
         builder.add(types.InlineKeyboardButton(text="➕ Yangi qism qo'shish", callback_data=f"edit_action:addep:{code}"))
         builder.add(types.InlineKeyboardButton(text="🔁 Qism videosini almashtirish", callback_data=f"edit_action:replaceep:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"edit_action:delete:{code}"))
         builder.adjust(1)
         await message.answer("Nimani tahrirlaysiz?", reply_markup=builder.as_markup())
         await state.set_state(EditContent.waiting_for_action)
@@ -916,6 +949,7 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         builder.add(types.InlineKeyboardButton(text="📝 Tavsif", callback_data=f"edit_action:moviedesc:{code}"))
         builder.add(types.InlineKeyboardButton(text="🖼 Poster", callback_data=f"edit_action:moviepic:{code}"))
         builder.add(types.InlineKeyboardButton(text="🎥 Videoni almashtirish", callback_data=f"edit_action:movievideo:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"edit_action:delete:{code}"))
         builder.adjust(1)
         await message.answer("Nimani tahrirlaysiz?", reply_markup=builder.as_markup())
         await state.set_state(EditContent.waiting_for_action)
@@ -1015,6 +1049,50 @@ async def edit_action_replaceep(callback: types.CallbackQuery, state: FSMContext
     await callback.answer()
 
 
+# 0.9.0.5. O'chirish so'ralganda — tasdiqlash so'raymiz
+@dp.callback_query(F.data.startswith("edit_action:delete:"))
+async def edit_action_delete(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"confirm_delete:{code}"))
+    builder.add(types.InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_delete"))
+    builder.adjust(1)
+    await callback.message.answer(
+        f"⚠️ Kod {code} bo'yicha kino/serialni botdan butunlay o'chirmoqchimisiz?\n"
+        f"(Kanaldagi video o'chmaydi, faqat bot bazasidan olib tashlanadi, "
+        f"foydalanuvchilar uni topa olmaydi)",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("confirm_delete:"))
+async def confirm_delete(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[1]
+
+    if get_episodes(code):
+        delete_series(code)
+    elif get_movie(code) is not None:
+        delete_movie(code)
+    else:
+        await callback.message.answer("❌ Bu kod allaqachon topilmadi.")
+        await callback.answer()
+        await state.clear()
+        return
+
+    await callback.message.answer(f"🗑 Kod {code} muvaffaqiyatli o'chirildi.")
+    await callback.answer()
+    await state.clear()
+
+
+@dp.callback_query(F.data == "cancel_delete")
+async def cancel_delete(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Bekor qilindi.")
+    await callback.answer()
+    await state.clear()
+
+
 @dp.callback_query(F.data.startswith("edit_pick_ep:"))
 async def edit_pick_episode(callback: types.CallbackQuery, state: FSMContext):
     _, code, episode_number = callback.data.split(":")
@@ -1039,6 +1117,7 @@ async def process_edit_episode_video(message: types.Message, state: FSMContext):
             message_id=message_id,
             media=types.InputMediaVideo(media=message.video.file_id, caption=caption)
         )
+        save_episode(code, episode_number, message_id, message.video.file_id)
         await message.answer(f"✅ {episode_number}-qism videosi muvaffaqiyatli almashtirildi!")
     except Exception:
         logging.exception("Qism videosini almashtirishda xato:")
@@ -1423,21 +1502,35 @@ async def send_episode(callback: types.CallbackQuery):
         return
 
     try:
-        # Chiroyliroq ko'rinishi uchun avval serial posterini yuboramiz (agar mavjud bo'lsa)
         info = get_series_info(series_code)
-        if info and info[1]:
-            await bot.send_photo(
+        poster_file_id = info[1] if info else None
+        video_file_id = get_episode_video_file_id(series_code, episode_number)
+        caption = f"📺 {episode_number}-qism"
+
+        if video_file_id:
+            # Video va poster BITTA xabarda — poster thumbnail (view rasmi) sifatida
+            await bot.send_video(
                 chat_id=callback.from_user.id,
-                photo=info[1],
-                caption=f"📺 {episode_number}-qism"
+                video=video_file_id,
+                thumbnail=poster_file_id if poster_file_id else None,
+                caption=caption,
+                reply_markup=get_extra_buttons(series_code)
+            )
+        else:
+            # Eski qismlarda video_file_id saqlanmagan — avvalgi usul bilan yuboramiz
+            if poster_file_id:
+                await bot.send_photo(
+                    chat_id=callback.from_user.id,
+                    photo=poster_file_id,
+                    caption=caption
+                )
+            await bot.copy_message(
+                chat_id=callback.from_user.id,
+                from_chat_id=CHANNEL_ID,
+                message_id=message_id,
+                reply_markup=get_extra_buttons(series_code)
             )
 
-        await bot.copy_message(
-            chat_id=callback.from_user.id,
-            from_chat_id=CHANNEL_ID,
-            message_id=message_id,
-            reply_markup=get_extra_buttons(series_code)
-        )
         increment_downloads(series_code)
         await callback.answer()
     except Exception:
