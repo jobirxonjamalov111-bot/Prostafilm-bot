@@ -481,10 +481,16 @@ async def check_subscription_callback(callback: types.CallbackQuery):
 
 
 DEFAULT_WELCOME_TEXT = (
-    "🎬 Assalomu alekum! PROSTAFILM — Eng sara kinolar bazasi. 🍿\n\n"
-    "Istalgan filmni soniyalar ichida toping. Qidiruvni boshlash uchun kino nomini yoki kodini yozib yuboring\n\n"
-    " Yoki Pastdagi tugmalardan foydalaning👇:"
+    "👋 Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
+    "🍿 Bot orqali siz kino/seriallarni nomi yoki kodi bo'yicha qidirishingiz mumkin.\n\n"
+    "👇 Pastdagi tugmalardan foydalaning:"
 )
+
+
+def get_persistent_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="🔍 Qidirish"))
+    return builder.as_markup(resize_keyboard=True)
 
 
 async def send_welcome(chat_id: int):
@@ -506,6 +512,21 @@ async def send_welcome(chat_id: int):
             parse_mode="HTML",
             reply_markup=get_main_keyboard()
         )
+
+    # Doimiy pastki panel — suhbatni aylantirganda ham ko'rinib turadi
+    await bot.send_message(
+        chat_id,
+        "👇 Har doim shu joydan qidirishingiz mumkin",
+        reply_markup=get_persistent_keyboard()
+    )
+
+
+@dp.message(F.text == "🔍 Qidirish")
+async def persistent_search_button(message: types.Message):
+    await message.answer(
+        "🔎 Kino yoki serial kodini yoki nomini yozing:",
+        reply_markup=types.ForceReply(input_field_placeholder="🔍 Nomi yoki kodini yozing...")
+    )
 
 
 # 0.1. Admin uchun ommaviy xabar (broadcast) yuborish
@@ -1139,6 +1160,12 @@ async def process_movie_poster_wrong(message: types.Message):
 # 4. Asosiy menyu tugmalari (inline)
 
 
+def get_back_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data="menu:back"))
+    return builder.as_markup()
+
+
 @dp.callback_query(F.data == "menu:help")
 async def menu_help(callback: types.CallbackQuery):
     await callback.message.answer(
@@ -1146,7 +1173,8 @@ async def menu_help(callback: types.CallbackQuery):
         "1️⃣ Kino yoki serial kodini bilsangiz — shunchaki raqamni yuboring (masalan: 123)\n"
         "2️⃣ Kodni bilmasangiz — kino yoki serial nomini yozing (masalan: Yunus Emre)\n"
         "3️⃣ Chiqqan natijalardan birini tanlang\n\n"
-        "Yordam kerak bo'lsa, botni qayta ishga tushirish uchun /start ni bosing."
+        "Yordam kerak bo'lsa, botni qayta ishga tushirish uchun /start ni bosing.",
+        reply_markup=get_back_keyboard()
     )
     await callback.answer()
 
@@ -1163,8 +1191,16 @@ async def menu_profile(callback: types.CallbackQuery):
         f"📛 Ism: {user.full_name}\n"
         f"🔗 Username: {username}\n"
         f"🆔 ID: {user.id}\n"
-        f"📅 Ro'yxatdan o'tgan sana: {joined_display}"
+        f"📅 Ro'yxatdan o'tgan sana: {joined_display}",
+        reply_markup=get_back_keyboard()
     )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "menu:back")
+async def menu_back(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await send_welcome(callback.message.chat.id)
     await callback.answer()
 
 
@@ -1355,11 +1391,19 @@ async def inline_search(inline_query: types.InlineQuery):
         poster_url = get_movie_poster_url(code) if kind == "movie" else get_series_poster_url(code)
 
         builder = InlineKeyboardBuilder()
-        label = "🎬 Kinoni olish" if kind == "movie" else "📺 Barcha qismlarni ko'rish"
-        builder.add(types.InlineKeyboardButton(
-            text=label,
-            url=f"https://t.me/{BOT_USERNAME}?start=code_{code}"
-        ))
+        if kind == "movie":
+            builder.add(types.InlineKeyboardButton(
+                text="🎬 Kinoni olish",
+                callback_data=f"pick:movie:{code}"
+            ))
+        else:
+            episodes = get_episodes(code)
+            for episode_number, _ in episodes:
+                builder.add(types.InlineKeyboardButton(
+                    text=f"{episode_number}-qism",
+                    callback_data=f"ep:{code}:{episode_number}"
+                ))
+            builder.adjust(3)
 
         caption = f"{title}\n\n🔑 Kodi: {code}"
 
