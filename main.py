@@ -101,6 +101,14 @@ def init_db():
     episode_columns = [row[1] for row in conn.execute("PRAGMA table_info(episodes)").fetchall()]
     if "video_file_id" not in episode_columns:
         conn.execute("ALTER TABLE episodes ADD COLUMN video_file_id TEXT")
+    if "season_number" not in episode_columns:
+        conn.execute("ALTER TABLE episodes ADD COLUMN season_number INTEGER NOT NULL DEFAULT 1")
+    if "description" not in episode_columns:
+        conn.execute("ALTER TABLE episodes ADD COLUMN description TEXT")
+    if "poster_file_id" not in episode_columns:
+        conn.execute("ALTER TABLE episodes ADD COLUMN poster_file_id TEXT")
+    if "poster_url" not in episode_columns:
+        conn.execute("ALTER TABLE episodes ADD COLUMN poster_url TEXT")
 
     conn.commit()
     conn.close()
@@ -140,25 +148,44 @@ def get_all_users() -> list[int]:
     return [row[0] for row in rows]
 
 
-def save_episode(series_code: str, episode_number: int, message_id: int, video_file_id: str | None = None):
+def save_episode(series_code: str, episode_number: int, message_id: int, video_file_id: str | None = None, season_number: int = 1):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT OR REPLACE INTO episodes (series_code, episode_number, message_id, video_file_id) VALUES (?, ?, ?, ?)",
-        (series_code, episode_number, message_id, video_file_id)
+        "INSERT OR REPLACE INTO episodes (series_code, episode_number, message_id, video_file_id, season_number) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (series_code, episode_number, message_id, video_file_id, season_number)
     )
     conn.commit()
     conn.close()
 
 
-def get_episodes(series_code: str) -> list[tuple[int, int]]:
-    """[(episode_number, message_id), ...] tartiblangan holda qaytaradi."""
+def get_episodes(series_code: str, season_number: int | None = None) -> list[tuple[int, int]]:
+    """[(episode_number, message_id), ...] tartiblangan holda qaytaradi.
+    season_number berilsa, faqat o'sha fasl qismlari qaytariladi."""
+    conn = sqlite3.connect(DB_PATH)
+    if season_number is not None:
+        rows = conn.execute(
+            "SELECT episode_number, message_id FROM episodes WHERE series_code = ? AND season_number = ? ORDER BY episode_number",
+            (series_code, season_number)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT episode_number, message_id FROM episodes WHERE series_code = ? ORDER BY episode_number",
+            (series_code,)
+        ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_seasons(series_code: str) -> list[int]:
+    """Shu serialdagi barcha fasl raqamlarini tartiblangan holda qaytaradi."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT episode_number, message_id FROM episodes WHERE series_code = ? ORDER BY episode_number",
+        "SELECT DISTINCT season_number FROM episodes WHERE series_code = ? ORDER BY season_number",
         (series_code,)
     ).fetchall()
     conn.close()
-    return rows
+    return [row[0] for row in rows]
 
 
 def get_episode_message_id(series_code: str, episode_number: int) -> int | None:
@@ -180,6 +207,39 @@ def get_episode_video_file_id(series_code: str, episode_number: int) -> str | No
     conn.close()
     return row[0] if row and row[0] else None
 
+
+def set_episode_info(series_code: str, episode_number: int, description: str | None = None,
+                      poster_file_id: str | None = None, poster_url: str | None = None):
+    """Faqat berilgan (None bo'lmagan) maydonlarni yangilaydi, qolganini eskicha qoldiradi."""
+    conn = sqlite3.connect(DB_PATH)
+    existing = conn.execute(
+        "SELECT description, poster_file_id, poster_url FROM episodes WHERE series_code = ? AND episode_number = ?",
+        (series_code, episode_number)
+    ).fetchone()
+    old_description, old_poster_file_id, old_poster_url = existing if existing else (None, None, None)
+
+    final_description = description if description is not None else old_description
+    final_poster_file_id = poster_file_id if poster_file_id is not None else old_poster_file_id
+    final_poster_url = poster_url if poster_url is not None else old_poster_url
+
+    conn.execute(
+        "UPDATE episodes SET description = ?, poster_file_id = ?, poster_url = ? "
+        "WHERE series_code = ? AND episode_number = ?",
+        (final_description, final_poster_file_id, final_poster_url, series_code, episode_number)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_episode_info(series_code: str, episode_number: int) -> tuple[str | None, str | None, str | None]:
+    """(description, poster_file_id, poster_url) qaytaradi."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT description, poster_file_id, poster_url FROM episodes WHERE series_code = ? AND episode_number = ?",
+        (series_code, episode_number)
+    ).fetchone()
+    conn.close()
+    return row if row else (None, None, None)
 
 
 def save_series_info(series_code: str, description: str, photo_file_id: str | None, poster_url: str | None = None):
@@ -379,6 +439,8 @@ class EditContent(StatesGroup):
     waiting_for_movie_poster = State()
     waiting_for_movie_video = State()
     waiting_for_episode_video = State()
+    waiting_for_episode_description = State()
+    waiting_for_episode_poster = State()
 
 
 class OrderRequest(StatesGroup):
@@ -462,9 +524,9 @@ async def check_subscription(user_id: int) -> bool:
 
 def get_subscribe_keyboard():
     builder = InlineKeyboardBuilder()
-    for channel in MANDATORY_CHANNELS:
+    for i, channel in enumerate(MANDATORY_CHANNELS, start=1):
         builder.add(types.InlineKeyboardButton(
-            text=f"➡️ {channel}",
+            text=f"{i}-kanal",
             url=f"https://t.me/{channel.replace('@', '')}"
         ))
     builder.add(types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_subscription"))
@@ -871,14 +933,17 @@ async def process_series_episode(message: types.Message, state: FSMContext):
     data = await state.get_data()
     series_code = data.get("series_code")
     episode_number = data.get("next_episode", 1)
+    season_number = data.get("season_number", 1)
 
     try:
+        caption = f"🎬 Serial kodi: {series_code}\n📺 {season_number}-fasl, {episode_number}-qism" if season_number > 1 \
+            else f"🎬 Serial kodi: {series_code}\n📺 {episode_number}-qism"
         sent_msg = await bot.send_video(
             chat_id=CHANNEL_ID,
             video=message.video.file_id,
-            caption=f"🎬 Serial kodi: {series_code}\n📺 {episode_number}-qism"
+            caption=caption
         )
-        save_episode(series_code, episode_number, sent_msg.message_id, message.video.file_id)
+        save_episode(series_code, episode_number, sent_msg.message_id, message.video.file_id, season_number)
         await message.answer(
             f"✅ {episode_number}-qism saqlandi!\n"
             f"Keyingi qismni yuboring yoki tugatish uchun /done yozing."
@@ -940,6 +1005,8 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         builder = InlineKeyboardBuilder()
         builder.add(types.InlineKeyboardButton(text="📝 Tavsif/Poster", callback_data=f"edit_action:info:{code}"))
         builder.add(types.InlineKeyboardButton(text="➕ Yangi qism qo'shish", callback_data=f"edit_action:addep:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🆕 Yangi fasl qo'shish", callback_data=f"edit_action:addseason:{code}"))
+        builder.add(types.InlineKeyboardButton(text="✏️ Qism tavsif/poster", callback_data=f"edit_action:epinfo:{code}"))
         builder.add(types.InlineKeyboardButton(text="🔁 Qism videosini almashtirish", callback_data=f"edit_action:replaceep:{code}"))
         builder.add(types.InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"edit_action:delete:{code}"))
         builder.adjust(1)
@@ -949,7 +1016,7 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         await state.update_data(code=code)
         builder = InlineKeyboardBuilder()
         builder.add(types.InlineKeyboardButton(text="📝 Tavsif", callback_data=f"edit_action:moviedesc:{code}"))
-        builder.add(types.InlineKeyboardButton(text="🖼 Poster", callback_data=f"edit_action:moviepic:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🖼 Poster (video va qidiruvda)", callback_data=f"edit_action:moviepic:{code}"))
         builder.add(types.InlineKeyboardButton(text="🎥 Videoni almashtirish", callback_data=f"edit_action:movievideo:{code}"))
         builder.add(types.InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"edit_action:delete:{code}"))
         builder.adjust(1)
@@ -1154,14 +1221,123 @@ async def edit_action_addep(callback: types.CallbackQuery, state: FSMContext):
     code = callback.data.split(":")[2]
     existing = get_episodes(code)
     next_episode = (existing[-1][0] + 1) if existing else 1
+    seasons = get_seasons(code)
+    current_season = seasons[-1] if seasons else 1
 
-    await state.update_data(series_code=code, next_episode=next_episode)
+    await state.update_data(series_code=code, next_episode=next_episode, season_number=current_season)
     await callback.message.answer(
         f"🎬 {next_episode}-qism videosini yuboring.\n"
         f"Barcha yangi qismlarni yuklab bo'lgach /done deb yozing."
     )
     await state.set_state(SeriesUpload.waiting_for_episode)
     await callback.answer()
+
+
+# 0.9.2.1. "Yangi fasl qo'shish" tanlanganda
+@dp.callback_query(F.data.startswith("edit_action:addseason:"))
+async def edit_action_addseason(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    seasons = get_seasons(code)
+    next_season = (max(seasons) + 1) if seasons else 2
+
+    await state.update_data(series_code=code, next_episode=1, season_number=next_season)
+    await callback.message.answer(
+        f"🆕 {next_season}-fasl boshlandi!\n"
+        f"1-qism videosini yuboring. Barcha qismlarni yuklab bo'lgach /done deb yozing."
+    )
+    await state.set_state(SeriesUpload.waiting_for_episode)
+    await callback.answer()
+
+
+# 0.9.2.2. "Qism tavsif/poster" tanlanganda — qism raqamini so'raymiz
+@dp.callback_query(F.data.startswith("edit_action:epinfo:"))
+async def edit_action_epinfo(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    episodes = get_episodes(code)
+
+    builder = InlineKeyboardBuilder()
+    for episode_number, _ in episodes:
+        builder.add(types.InlineKeyboardButton(
+            text=f"{episode_number}-qism",
+            callback_data=f"edit_pick_epinfo:{code}:{episode_number}"
+        ))
+    builder.adjust(3)
+    await callback.message.answer("Qaysi qism uchun tavsif/poster kiritasiz?", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("edit_pick_epinfo:"))
+async def edit_pick_epinfo(callback: types.CallbackQuery, state: FSMContext):
+    _, code, episode_number = callback.data.split(":")
+    await state.update_data(code=code, episode_number=int(episode_number))
+
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="epinfo_skip:description"))
+    await callback.message.answer(
+        f"📝 {episode_number}-qism uchun tavsif matnini yuboring (o'tkazib yuborishingiz mumkin):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(EditContent.waiting_for_episode_description)
+    await callback.answer()
+
+
+@dp.message(EditContent.waiting_for_episode_description)
+async def process_episode_description(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida tavsif yuboring!")
+        return
+    await state.update_data(episode_description=message.text)
+    await ask_for_episode_poster(message, state)
+
+
+@dp.callback_query(F.data == "epinfo_skip:description")
+async def episode_description_skip(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(episode_description=None)
+    await ask_for_episode_poster(callback.message, state)
+    await callback.answer()
+
+
+async def ask_for_episode_poster(message: types.Message, state: FSMContext):
+    builder = InlineKeyboardBuilder()
+    builder.add(types.InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="epinfo_skip:poster"))
+    await message.answer(
+        "🖼 Endi shu qism uchun poster (rasm) yuboring (o'tkazib yuborishingiz mumkin):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(EditContent.waiting_for_episode_poster)
+
+
+@dp.message(EditContent.waiting_for_episode_poster, F.photo)
+async def process_episode_poster(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+    episode_number = data["episode_number"]
+    description = data.get("episode_description")
+
+    photo_file_id = message.photo[-1].file_id
+    poster_url = await upload_poster_to_telegraph(photo_file_id)
+
+    set_episode_info(code, episode_number, description, photo_file_id, poster_url)
+    await message.answer(f"✅ {episode_number}-qism ma'lumotlari yangilandi!")
+    await state.clear()
+
+
+@dp.callback_query(F.data == "epinfo_skip:poster")
+async def episode_poster_skip(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    code = data["code"]
+    episode_number = data["episode_number"]
+    description = data.get("episode_description")
+
+    set_episode_info(code, episode_number, description, None, None)
+    await callback.message.answer(f"✅ {episode_number}-qism ma'lumotlari yangilandi (poster o'zgarmadi)!")
+    await state.clear()
+    await callback.answer()
+
+
+@dp.message(EditContent.waiting_for_episode_poster)
+async def process_episode_poster_wrong(message: types.Message):
+    await message.answer("❗ Iltimos, rasm yuboring yoki yuqoridagi tugmani bosing.")
 
 
 # 0.10. Yangi tavsifni qabul qilish (matn orqali)
@@ -1448,13 +1624,25 @@ async def deliver_series_post(chat_id: int, code: str) -> bool:
 
     increment_downloads(code)
 
+    seasons = get_seasons(code)
     builder = InlineKeyboardBuilder()
-    for episode_number, _ in episodes:
-        builder.add(types.InlineKeyboardButton(
-            text=f"{episode_number}-qism",
-            callback_data=f"ep:{code}:{episode_number}"
-        ))
-    builder.adjust(3)
+
+    if len(seasons) > 1:
+        # Bir nechta fasl bor — avval fasl tanlash tugmalarini ko'rsatamiz
+        for season_number in seasons:
+            builder.add(types.InlineKeyboardButton(
+                text=f"{season_number}-fasl",
+                callback_data=f"season:{code}:{season_number}"
+            ))
+        builder.adjust(3)
+    else:
+        # Bitta fasl — to'g'ridan-to'g'ri qism tugmalarini ko'rsatamiz
+        for episode_number, _ in episodes:
+            builder.add(types.InlineKeyboardButton(
+                text=f"{episode_number}-qism",
+                callback_data=f"ep:{code}:{episode_number}"
+            ))
+        builder.adjust(3)
 
     info = get_series_info(code)
     if info:
@@ -1467,6 +1655,22 @@ async def deliver_series_post(chat_id: int, code: str) -> bool:
     else:
         await bot.send_message(chat_id, "📺 Serial topildi! Qismni tanlang:", reply_markup=builder.as_markup())
     return True
+
+
+@dp.callback_query(F.data.startswith("season:"))
+async def show_season_episodes(callback: types.CallbackQuery):
+    _, code, season_number = callback.data.split(":")
+    episodes = get_episodes(code, int(season_number))
+
+    builder = InlineKeyboardBuilder()
+    for episode_number, _ in episodes:
+        builder.add(types.InlineKeyboardButton(
+            text=f"{episode_number}-qism",
+            callback_data=f"ep:{code}:{episode_number}"
+        ))
+    builder.adjust(3)
+    await callback.message.answer(f"📺 {season_number}-fasl qismlari:", reply_markup=builder.as_markup())
+    await callback.answer()
 
 
 def get_extra_buttons(code: str):
@@ -1554,10 +1758,16 @@ async def send_episode(callback: types.CallbackQuery):
         return
 
     try:
-        info = get_series_info(series_code)
-        poster_file_id = info[1] if info else None
+        series_info = get_series_info(series_code)
+        series_poster = series_info[1] if series_info else None
+
+        ep_description, ep_poster_file_id, _ = get_episode_info(series_code, episode_number)
+
+        # Qismning o'z posteri bo'lsa — o'shani, bo'lmasa serial posterini ishlatamiz
+        poster_file_id = ep_poster_file_id or series_poster
+        caption = ep_description or f"📺 {episode_number}-qism"
+
         video_file_id = get_episode_video_file_id(series_code, episode_number)
-        caption = f"📺 {episode_number}-qism"
 
         if video_file_id:
             thumb_file = await get_thumbnail_file(poster_file_id) if poster_file_id else None
@@ -1682,22 +1892,14 @@ async def inline_search(inline_query: types.InlineQuery):
             ))
         else:
             poster_url = get_series_poster_url(code)
-            builder = InlineKeyboardBuilder()
-            episodes = get_episodes(code)
-            for episode_number, _ in episodes:
-                builder.add(types.InlineKeyboardButton(
-                    text=f"{episode_number}-qism",
-                    callback_data=f"ep:{code}:{episode_number}"
-                ))
-            builder.adjust(3)
-
             items.append(types.InlineQueryResultArticle(
                 id=f"series:{code}",
                 title=short_title,
                 description=description_line,
                 thumbnail_url=poster_url if poster_url else None,
-                input_message_content=types.InputTextMessageContent(message_text=caption),
-                reply_markup=builder.as_markup()
+                input_message_content=types.InputTextMessageContent(
+                    message_text=f"🔑 Kod: {code}\n⏳ Serial yuborilmoqda..."
+                )
             ))
 
     await inline_query.answer(items, cache_time=5, is_personal=False)
@@ -1712,8 +1914,11 @@ async def track_chosen_result(chosen: types.ChosenInlineResult):
             # deliver_movie o'zi video_file_id + poster (thumbnail) bilan to'g'ri yuboradi
             # va yuklashlar sonini ham hisoblaydi
             await deliver_movie(chosen.from_user.id, code)
+        elif kind == "series":
+            # deliver_series_post poster+tavsif+fasl/qism tugmalarini yuboradi
+            await deliver_series_post(chosen.from_user.id, code)
     except Exception:
-        logging.exception("Inline orqali kino yuborishda xato:")
+        logging.exception("Inline orqali yuborishda xato:")
 
 
 async def main():
