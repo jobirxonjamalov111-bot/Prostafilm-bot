@@ -462,7 +462,7 @@ def get_subscribe_keyboard():
     builder = InlineKeyboardBuilder()
     for channel in MANDATORY_CHANNELS:
         builder.add(types.InlineKeyboardButton(
-            text=f"  {MANDATORY_CHANNELS.index(channel) + 1}-kanal",
+            text=f"➡️ {channel}",
             url=f"https://t.me/{channel.replace('@', '')}"
         ))
     builder.add(types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_subscription"))
@@ -1420,6 +1420,14 @@ async def process_order(message: types.Message, state: FSMContext):
 
 @dp.message(F.text.isdigit())
 async def get_movie_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID and not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ Botdan foydalanish uchun avval kanal(lar)ga a'zo bo'ling, "
+            "so'ng \"✅ Tekshirish\" tugmasini bosing:",
+            reply_markup=get_subscribe_keyboard()
+        )
+        return
+
     code = message.text
     delivered = await deliver_series_post(message.chat.id, code)
     if delivered:
@@ -1486,6 +1494,17 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
     return True
 
 
+async def get_thumbnail_file(photo_file_id: str) -> types.BufferedInputFile | None:
+    """Thumbnail sifatida ishlatish uchun rasmni yangidan yuklab, InputFile qaytaradi."""
+    try:
+        file = await bot.get_file(photo_file_id)
+        file_bytes_io = await bot.download_file(file.file_path)
+        return types.BufferedInputFile(file_bytes_io.read(), filename="thumb.jpg")
+    except Exception:
+        logging.exception("Thumbnail tayyorlashda xato:")
+        return None
+
+
 # 4.1. Serial qismini tanlaganda yuborish
 @dp.callback_query(F.data.startswith("ep:"))
 async def send_episode(callback: types.CallbackQuery):
@@ -1508,11 +1527,12 @@ async def send_episode(callback: types.CallbackQuery):
         caption = f"📺 {episode_number}-qism"
 
         if video_file_id:
+            thumb_file = await get_thumbnail_file(poster_file_id) if poster_file_id else None
             # Video va poster BITTA xabarda — poster thumbnail (view rasmi) sifatida
             await bot.send_video(
                 chat_id=callback.from_user.id,
                 video=video_file_id,
-                thumbnail=poster_file_id if poster_file_id else None,
+                thumbnail=thumb_file,
                 caption=caption,
                 reply_markup=get_extra_buttons(series_code)
             )
@@ -1550,6 +1570,14 @@ async def search_by_name(message: types.Message):
 
     query = message.text.strip()
     if not query or query.startswith("/"):
+        return
+
+    if message.from_user.id != ADMIN_ID and not await check_subscription(message.from_user.id):
+        await message.answer(
+            "⚠️ Botdan foydalanish uchun avval kanal(lar)ga a'zo bo'ling, "
+            "so'ng \"✅ Tekshirish\" tugmasini bosing:",
+            reply_markup=get_subscribe_keyboard()
+        )
         return
 
     results = search_content(query)
