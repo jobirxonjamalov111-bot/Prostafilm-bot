@@ -1481,13 +1481,29 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
     if not message_id:
         return False
 
+    video_file_id = get_movie_video_file_id(code)
+    poster_file_id = get_movie_poster(code)
+
     try:
-        await bot.copy_message(
-            chat_id=chat_id,
-            from_chat_id=CHANNEL_ID,
-            message_id=message_id,
-            reply_markup=get_extra_buttons(code)
-        )
+        if video_file_id:
+            thumb_file = await get_thumbnail_file(poster_file_id) if poster_file_id else None
+            title = get_movie_title(code) or ""
+            caption = f"🎬 {title}\n\n🔑 Kino kodi: {code}"
+            await bot.send_video(
+                chat_id=chat_id,
+                video=video_file_id,
+                thumbnail=thumb_file,
+                caption=caption,
+                reply_markup=get_extra_buttons(code)
+            )
+        else:
+            # Eski kinolarda video_file_id saqlanmagan — avvalgi usul bilan yuboramiz
+            await bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=CHANNEL_ID,
+                message_id=message_id,
+                reply_markup=get_extra_buttons(code)
+            )
         increment_downloads(code)
     except Exception:
         logging.exception("Kino yuborishda xato:")
