@@ -1670,30 +1670,15 @@ async def inline_search(inline_query: types.InlineQuery):
         caption = f"{title}\n\n🔑 Kodi: {code}"
 
         if kind == "movie":
-            video_file_id = get_movie_video_file_id(code)
-            if video_file_id:
-                # Video faylining o'zi natija sifatida — bitta bosishda darhol yuboriladi
-                items.append(types.InlineQueryResultCachedVideo(
-                    id=f"movie:{code}",
-                    video_file_id=video_file_id,
-                    title=short_title,
-                    description=description_line,
-                    caption=caption,
-                    reply_markup=get_extra_buttons(code)
-                ))
-                continue
-
-            # Eski kinolarda video_file_id saqlanmagan bo'lishi mumkin — tugma bilan zaxira variant
             poster_url = get_movie_poster_url(code)
-            builder = InlineKeyboardBuilder()
-            builder.add(types.InlineKeyboardButton(text="🎬 Kinoni olish", callback_data=f"pick:movie:{code}"))
             items.append(types.InlineQueryResultArticle(
                 id=f"movie:{code}",
                 title=short_title,
                 description=description_line,
                 thumbnail_url=poster_url if poster_url else None,
-                input_message_content=types.InputTextMessageContent(message_text=caption),
-                reply_markup=builder.as_markup()
+                input_message_content=types.InputTextMessageContent(
+                    message_text=f"🔑 Kod: {code}\n⏳ Kino yuborilmoqda..."
+                )
             ))
         else:
             poster_url = get_series_poster_url(code)
@@ -1720,14 +1705,15 @@ async def inline_search(inline_query: types.InlineQuery):
 
 @dp.chosen_inline_result()
 async def track_chosen_result(chosen: types.ChosenInlineResult):
-    # result_id "movie:<code>" ko'rinishida — video to'g'ridan-to'g'ri yuborilgani uchun
-    # bu yerda hisoblaymiz (Article natijalar esa tugma bosilganda o'zi hisoblanadi)
+    # result_id "movie:<code>" yoki "series:<code>" ko'rinishida
     try:
         kind, code = chosen.result_id.split(":", 1)
         if kind == "movie":
-            increment_downloads(code)
+            # deliver_movie o'zi video_file_id + poster (thumbnail) bilan to'g'ri yuboradi
+            # va yuklashlar sonini ham hisoblaydi
+            await deliver_movie(chosen.from_user.id, code)
     except Exception:
-        pass
+        logging.exception("Inline orqali kino yuborishda xato:")
 
 
 async def main():
