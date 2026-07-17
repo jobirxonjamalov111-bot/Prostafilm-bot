@@ -3,7 +3,9 @@ import os
 import logging
 import sqlite3
 import aiohttp
+from io import BytesIO
 from datetime import datetime, timezone
+from PIL import Image
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -1511,11 +1513,26 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
 
 
 async def get_thumbnail_file(photo_file_id: str) -> types.BufferedInputFile | None:
-    """Thumbnail sifatida ishlatish uchun rasmni yangidan yuklab, InputFile qaytaradi."""
+    """Thumbnail sifatida ishlatish uchun rasmni Telegram talablariga moslab
+    (320x320gacha, <200KB) kichraytirib, yangidan yuklab beradi."""
     try:
         file = await bot.get_file(photo_file_id)
         file_bytes_io = await bot.download_file(file.file_path)
-        return types.BufferedInputFile(file_bytes_io.read(), filename="thumb.jpg")
+
+        img = Image.open(file_bytes_io)
+        img = img.convert("RGB")
+        img.thumbnail((320, 320))
+
+        output = BytesIO()
+        img.save(output, format="JPEG", quality=85)
+        data = output.getvalue()
+
+        if len(data) > 200 * 1024:
+            output = BytesIO()
+            img.save(output, format="JPEG", quality=50)
+            data = output.getvalue()
+
+        return types.BufferedInputFile(data, filename="thumb.jpg")
     except Exception:
         logging.exception("Thumbnail tayyorlashda xato:")
         return None
