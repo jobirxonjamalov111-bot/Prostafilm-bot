@@ -292,6 +292,17 @@ def set_download_baseline(value: int):
     set_setting("download_baseline", str(value))
 
 
+def set_code_downloads(code: str, value: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO stats (code, downloads) VALUES (?, ?) "
+        "ON CONFLICT(code) DO UPDATE SET downloads = ?",
+        (code, value, value)
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_downloads(code: str) -> int:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT downloads FROM stats WHERE code = ?", (code,)).fetchone()
@@ -450,6 +461,11 @@ class OrderRequest(StatesGroup):
 class SettingsUpdate(StatesGroup):
     waiting_for_banner = State()
     waiting_for_welcome_text = State()
+
+
+class SetCodeBaseline(StatesGroup):
+    waiting_for_code = State()
+    waiting_for_number = State()
 
 
 class AddButton(StatesGroup):
@@ -663,9 +679,9 @@ async def process_broadcast(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Yuborildi: {success} ta\n❌ Yuborilmadi: {failed} ta")
 
 
-# 0.2.3. Admin uchun — yuklashlar sonining boshlang'ich bazasini sozlash
-@dp.message(Command("setbaseline"))
-async def setbaseline_command(message: types.Message):
+# 0.2.3. Admin uchun — barcha kino/seriallar uchun umumiy boshlang'ich raqam
+@dp.message(Command("setglobalbaseline"))
+async def setglobalbaseline_command(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
@@ -673,14 +689,57 @@ async def setbaseline_command(message: types.Message):
     if len(parts) < 2 or not parts[1].strip().isdigit():
         current = get_download_baseline()
         await message.answer(
-            f"ℹ️ Hozirgi boshlang'ich raqam: {current}\n\n"
-            f"O'zgartirish uchun: /setbaseline 100"
+            f"ℹ️ Hozirgi umumiy boshlang'ich raqam: {current}\n\n"
+            f"O'zgartirish uchun: /setglobalbaseline 100"
         )
         return
 
     new_value = int(parts[1].strip())
     set_download_baseline(new_value)
-    await message.answer(f"✅ Boshlang'ich raqam {new_value} ga o'rnatildi. Endi har bir kino/serial kamida shuncha yuklashlar bilan ko'rinadi.")
+    await message.answer(f"✅ Umumiy boshlang'ich raqam {new_value} ga o'rnatildi. Endi har bir kino/serial kamida shuncha yuklashlar bilan ko'rinadi.")
+
+
+# 0.2.3.1. Admin uchun — bitta kino/serial uchun alohida yuklashlar/ko'rishlar sonini sozlash
+@dp.message(Command("setbaseline"))
+async def setbaseline_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip().isdigit():
+        code = parts[1].strip()
+        await state.update_data(code=code)
+        await message.answer(f"🔢 Kod {code} uchun necha ko'rish/yuklashlar sonini kiritmoqchisiz?")
+        await state.set_state(SetCodeBaseline.waiting_for_number)
+    else:
+        await message.answer("🔑 Qaysi kino yoki serial kodi uchun sozlamoqchisiz?")
+        await state.set_state(SetCodeBaseline.waiting_for_code)
+
+
+@dp.message(SetCodeBaseline.waiting_for_code)
+async def setbaseline_code(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqam (kod) kiriting!")
+        return
+
+    await state.update_data(code=message.text)
+    await message.answer(f"🔢 Kod {message.text} uchun necha ko'rish/yuklashlar sonini kiritmoqchisiz?")
+    await state.set_state(SetCodeBaseline.waiting_for_number)
+
+
+@dp.message(SetCodeBaseline.waiting_for_number)
+async def setbaseline_number(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqam kiriting!")
+        return
+
+    data = await state.get_data()
+    code = data["code"]
+    value = int(message.text)
+
+    set_code_downloads(code, value)
+    await message.answer(f"✅ Kod {code} uchun yuklashlar soni {value} ga o'rnatildi.")
+    await state.clear()
 
 
 # 0.2.4. Admin uchun — mavjud posterni Telegraph'ga qayta yuklashga urinish
@@ -1221,18 +1280,44 @@ async def edit_action_info(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("edit_action:addep:"))
 async def edit_action_addep(callback: types.CallbackQuery, state: FSMContext):
     code = callback.data.split(":")[2]
-    existing = get_episodes(code)
-    next_episode = (existing[-1][0] + 1) if existing else 1
     seasons = get_seasons(code)
-    current_season = seasons[-1] if seasons else 1
 
-    await state.update_data(series_code=code, next_episode=next_episode, season_number=current_season)
-    await callback.message.answer(
-        f"🎬 {next_episode}-qism videosini yuboring.\n"
+    if len(seasons) > 1:
+        # Bir nechta fasl bor — qaysi faslga qo'shishni so'raymiz
+        builder = InlineKeyboardBuilder()
+        for season_number in seasons:
+            builder.add(types.InlineKeyboardButton(
+                text=f"{season_number}-fasl",
+                callback_data=f"addep_season:{code}:{season_number}"
+            ))
+        builder.adjust(3)
+        await callback.message.answer("Qaysi faslga qism qo'shasiz?", reply_markup=builder.as_markup())
+        await callback.answer()
+        return
+
+    # Bitta fasl bor — to'g'ridan-to'g'ri davom etamiz
+    current_season = seasons[0] if seasons else 1
+    await start_adding_episode(callback.message, state, code, current_season)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("addep_season:"))
+async def addep_season_picked(callback: types.CallbackQuery, state: FSMContext):
+    _, code, season_number = callback.data.split(":")
+    await start_adding_episode(callback.message, state, code, int(season_number))
+    await callback.answer()
+
+
+async def start_adding_episode(message: types.Message, state: FSMContext, code: str, season_number: int):
+    all_episodes = get_episodes(code)
+    next_episode = (all_episodes[-1][0] + 1) if all_episodes else 1
+
+    await state.update_data(series_code=code, next_episode=next_episode, season_number=season_number)
+    await message.answer(
+        f"🎬 {season_number}-fasl uchun {next_episode}-qism videosini yuboring.\n"
         f"Barcha yangi qismlarni yuklab bo'lgach /done deb yozing."
     )
     await state.set_state(SeriesUpload.waiting_for_episode)
-    await callback.answer()
 
 
 # 0.9.2.1. "Yangi fasl qo'shish" tanlanganda
