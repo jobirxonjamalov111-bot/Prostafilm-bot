@@ -553,13 +553,15 @@ async def start_command(message: types.Message):
         user = message.from_user
         username = f"@{user.username}" if user.username else "yo'q"
         total = get_user_count()
+        name_link = f"<a href='tg://user?id={user.id}'>{user.full_name}</a>"
         try:
             await bot.send_message(
                 ADMIN_ID,
                 f"🆕 Yangi foydalanuvchi! (#{total})\n\n"
-                f"👤 Ism: {user.full_name}\n"
+                f"👤 Ism: {name_link}\n"
                 f"🔗 Username: {username}\n"
-                f"🆔 ID: {user.id}"
+                f"🆔 ID: {user.id}",
+                parse_mode="HTML"
             )
         except Exception:
             logging.exception("Adminga xabar yuborishda xato:")
@@ -1240,10 +1242,14 @@ async def edit_action_addseason(callback: types.CallbackQuery, state: FSMContext
     seasons = get_seasons(code)
     next_season = (max(seasons) + 1) if seasons else 2
 
-    await state.update_data(series_code=code, next_episode=1, season_number=next_season)
+    # MUHIM: qism raqami serial bo'yicha umumiy (unique) bo'lishi kerak — 1dan boshlanmaydi!
+    all_episodes = get_episodes(code)
+    next_episode = (all_episodes[-1][0] + 1) if all_episodes else 1
+
+    await state.update_data(series_code=code, next_episode=next_episode, season_number=next_season)
     await callback.message.answer(
         f"🆕 {next_season}-fasl boshlandi!\n"
-        f"1-qism videosini yuboring. Barcha qismlarni yuklab bo'lgach /done deb yozing."
+        f"{next_episode}-qism videosini yuboring. Barcha qismlarni yuklab bo'lgach /done deb yozing."
     )
     await state.set_state(SeriesUpload.waiting_for_episode)
     await callback.answer()
@@ -1669,7 +1675,38 @@ async def show_season_episodes(callback: types.CallbackQuery):
             callback_data=f"ep:{code}:{episode_number}"
         ))
     builder.adjust(3)
-    await callback.message.answer(f"📺 {season_number}-fasl qismlari:", reply_markup=builder.as_markup())
+    builder.row(types.InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"backseasons:{code}"))
+
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=callback.message.caption, reply_markup=builder.as_markup())
+        else:
+            await callback.message.edit_text(text=callback.message.text, reply_markup=builder.as_markup())
+    except Exception:
+        await callback.message.answer(f"📺 {season_number}-fasl qismlari:", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("backseasons:"))
+async def back_to_seasons(callback: types.CallbackQuery):
+    code = callback.data.split(":")[1]
+    seasons = get_seasons(code)
+
+    builder = InlineKeyboardBuilder()
+    for season_number in seasons:
+        builder.add(types.InlineKeyboardButton(
+            text=f"{season_number}-fasl",
+            callback_data=f"season:{code}:{season_number}"
+        ))
+    builder.adjust(3)
+
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=callback.message.caption, reply_markup=builder.as_markup())
+        else:
+            await callback.message.edit_text(text=callback.message.text, reply_markup=builder.as_markup())
+    except Exception:
+        await callback.message.answer("📺 Faslni tanlang:", reply_markup=builder.as_markup())
     await callback.answer()
 
 
