@@ -91,6 +91,10 @@ def init_db():
         )
     """)
 
+    quality_columns = [row[1] for row in conn.execute("PRAGMA table_info(movie_qualities)").fetchall()]
+    if "description" not in quality_columns:
+        conn.execute("ALTER TABLE movie_qualities ADD COLUMN description TEXT")
+
     # Eski bazalarda "description" / "poster_file_id" / "poster_url" ustunlari bo'lmasligi mumkin — migratsiya
     existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(movies)").fetchall()]
     if "description" not in existing_columns:
@@ -371,11 +375,17 @@ def get_movie(code: str) -> int | None:
     return row[0] if row else None
 
 
-def save_movie_quality(code: str, quality: str, message_id: int):
+def save_movie_quality(code: str, quality: str, message_id: int, description: str | None = None):
     conn = sqlite3.connect(DB_PATH)
+    existing = conn.execute(
+        "SELECT description FROM movie_qualities WHERE code = ? AND quality = ?", (code, quality)
+    ).fetchone()
+    old_description = existing[0] if existing else None
+    final_description = description if description is not None else old_description
+
     conn.execute(
-        "INSERT OR REPLACE INTO movie_qualities (code, quality, message_id) VALUES (?, ?, ?)",
-        (code, quality, message_id)
+        "INSERT OR REPLACE INTO movie_qualities (code, quality, message_id, description) VALUES (?, ?, ?, ?)",
+        (code, quality, message_id, final_description)
     )
     conn.commit()
     conn.close()
@@ -399,6 +409,16 @@ def get_movie_quality_message_id(code: str, quality: str) -> int | None:
     ).fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def get_movie_quality_description(code: str, quality: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT description FROM movie_qualities WHERE code = ? AND quality = ?",
+        (code, quality)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 
 def set_movie_poster(code: str, poster_file_id: str, poster_url: str | None = None):
@@ -491,6 +511,7 @@ class EditContent(StatesGroup):
     waiting_for_episode_video = State()
     waiting_for_episode_description = State()
     waiting_for_episode_poster = State()
+    waiting_for_quality_description = State()
 
 
 class OrderRequest(StatesGroup):
@@ -1118,6 +1139,7 @@ async def process_edit_code(message: types.Message, state: FSMContext):
         builder.add(types.InlineKeyboardButton(text="📝 Tavsif", callback_data=f"edit_action:moviedesc:{code}"))
         builder.add(types.InlineKeyboardButton(text="🖼 Poster (video va qidiruvda)", callback_data=f"edit_action:moviepic:{code}"))
         builder.add(types.InlineKeyboardButton(text="🎥 Videoni almashtirish", callback_data=f"edit_action:movievideo:{code}"))
+        builder.add(types.InlineKeyboardButton(text="🎞 Sifat tavsifi", callback_data=f"edit_action:qualitydesc:{code}"))
         builder.add(types.InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"edit_action:delete:{code}"))
         builder.adjust(1)
         await message.answer("Nimani tahrirlaysiz?", reply_markup=builder.as_markup())
@@ -1199,6 +1221,60 @@ async def process_edit_movie_video(message: types.Message, state: FSMContext):
 @dp.message(EditContent.waiting_for_movie_video)
 async def process_edit_movie_video_wrong(message: types.Message):
     await message.answer("❗ Iltimos, video yuboring.")
+
+
+# 0.9.0.3.1. Kino sifat tavsifi — avval qaysi sifatni tanlash
+@dp.callback_query(F.data.startswith("edit_action:qualitydesc:"))
+async def edit_action_qualitydesc(callback: types.CallbackQuery, state: FSMContext):
+    code = callback.data.split(":")[2]
+    qualities = get_movie_qualities(code)
+
+    if not qualities:
+        await callback.message.answer("❌ Bu kino uchun hali sifat versiyalari yo'q.")
+        await callback.answer()
+        return
+
+    builder = InlineKeyboardBuilder()
+    for quality, _ in qualities:
+        builder.add(types.InlineKeyboardButton(
+            text=quality,
+            callback_data=f"edit_pick_quality:{code}:{quality}"
+        ))
+    builder.adjust(3)
+    await callback.message.answer("Qaysi sifat uchun tavsif kiritasiz?", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("edit_pick_quality:"))
+async def edit_pick_quality(callback: types.CallbackQuery, state: FSMContext):
+    _, code, quality = callback.data.split(":")
+    await state.update_data(code=code, quality=quality)
+    await callback.message.answer(f"📝 {quality} sifat uchun tavsif matnini yuboring:")
+    await state.set_state(EditContent.waiting_for_quality_description)
+    await callback.answer()
+
+
+@dp.message(EditContent.waiting_for_quality_description)
+async def process_quality_description(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Iltimos, matn ko'rinishida tavsif yuboring!")
+        return
+
+    data = await state.get_data()
+    code = data["code"]
+    quality = data["quality"]
+
+    message_id = get_movie_quality_message_id(code, quality)
+    new_caption = f"🎬 {message.text}\n\n🔑 Kino kodi: {code}\n🎞 Sifat: {quality}"
+
+    try:
+        await bot.edit_message_caption(chat_id=CHANNEL_ID, message_id=message_id, caption=new_caption)
+        save_movie_quality(code, quality, message_id, message.text)
+        await message.answer(f"✅ {quality} sifat uchun tavsif saqlandi!")
+    except Exception:
+        logging.exception("Sifat tavsifini saqlashda xato:")
+        await message.answer("⚠️ Xatolik yuz berdi, keyinroq urinib ko'ring.")
+    await state.clear()
 
 
 # 0.9.0.4. Serial qismi videosini almashtirish — avval qism raqamini tanlash
@@ -1892,7 +1968,7 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
     qualities = get_movie_qualities(code)
 
     if len(qualities) > 1:
-        # Bir nechta sifat versiyasi bor — tanlash tugmalarini ko'rsatamiz
+        # Bir nechta sifat versiyasi bor — poster+tavsif+tugmalarni birga ko'rsatamiz
         builder = InlineKeyboardBuilder()
         for quality, _ in qualities:
             builder.add(types.InlineKeyboardButton(
@@ -1900,7 +1976,15 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
                 callback_data=f"quality:{code}:{quality}"
             ))
         builder.adjust(3)
-        await bot.send_message(chat_id, "🎞 Qaysi sifatda olishni xohlaysiz?", reply_markup=builder.as_markup())
+
+        poster_file_id = get_movie_poster(code)
+        title = get_movie_title(code) or ""
+        caption = f"🎬 {title}\n\n🔑 Kino kodi: {code}"
+
+        if poster_file_id:
+            await bot.send_photo(chat_id, photo=poster_file_id, caption=caption, reply_markup=builder.as_markup())
+        else:
+            await bot.send_message(chat_id, caption, reply_markup=builder.as_markup())
         return True
 
     try:
