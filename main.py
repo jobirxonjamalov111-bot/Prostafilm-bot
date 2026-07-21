@@ -1998,7 +1998,7 @@ async def inline_search(inline_query: types.InlineQuery):
     for code, title, kind in results:
         downloads = get_downloads(code)
         short_title = title.split("\n")[0][:60]
-        description_line = f"⬇️ Yuklashlar: {downloads}"
+        description_line = f" Yuklashlar: {downloads}"
         caption = f"{title}\n\n🔑 Kodi: {code}"
 
         if kind == "movie":
