@@ -2068,13 +2068,20 @@ async def send_episode(callback: types.CallbackQuery):
         await callback.answer("❌ Bu qism topilmadi.", show_alert=True)
         return
 
+    ep_description, _, _ = get_episode_info(series_code, episode_number)
+
     try:
-        await bot.copy_message(
+        copy_kwargs = dict(
             chat_id=callback.from_user.id,
             from_chat_id=CHANNEL_ID,
             message_id=message_id,
             reply_markup=get_extra_buttons(series_code)
         )
+        if ep_description:
+            # Bazada saqlangan tavsif bo'lsa, kanal captionini bekor qilib, shuni ishlatamiz
+            copy_kwargs["caption"] = ep_description
+
+        await bot.copy_message(**copy_kwargs)
 
         increment_downloads(series_code)
         await callback.answer()
