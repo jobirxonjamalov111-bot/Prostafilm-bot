@@ -674,9 +674,10 @@ async def check_subscription_callback(callback: types.CallbackQuery):
 
 
 DEFAULT_WELCOME_TEXT = (
-    "👋 Assalomu alaykum! Botimizga xush kelibsiz!\n\n"
-    "🍿 Bot orqali siz kino/seriallarni nomi yoki kodi bo'yicha qidirishingiz mumkin.\n\n"
-    "👇 Pastdagi tugmalardan foydalaning:"
+    "🎥 Prosta Film botiga xush kelibsiz!\n\n"
+    "Bu yerda kino va seriallarni tez va qulay tarzda, "
+    "nomi yoki kodi orqali topishingiz mumkin.\n\n"
+    "Boshlash uchun pastdagi menyudan foydalaning 👇"
 )
 
 
@@ -772,7 +773,7 @@ async def setbaseline_command(message: types.Message, state: FSMContext):
         await message.answer(f"🔢 Kod {code} uchun necha ko'rish/yuklashlar sonini kiritmoqchisiz?")
         await state.set_state(SetCodeBaseline.waiting_for_number)
     else:
-        await message.answer("🔑 Qaysi kino yoki serial kodi uchun sozlamoqchisiz?")
+        await message.answer("📂 Qaysi kino yoki serial kodi uchun sozlamoqchisiz?")
         await state.set_state(SetCodeBaseline.waiting_for_code)
 
 
@@ -887,7 +888,7 @@ async def addbutton_command(message: types.Message, state: FSMContext):
         return
 
     await message.answer(
-        "🔑 Bu post qaysi kino yoki serial kodiga tegishli? Kodni yozing "
+        "📂 Bu post qaysi kino yoki serial kodiga tegishli? Kodni yozing "
         "(bu kod botda avval ro'yxatdan o'tgan bo'lishi kerak):"
     )
     await state.set_state(AddButton.waiting_for_code)
@@ -1089,7 +1090,7 @@ async def finish_series(message: types.Message, state: FSMContext):
 
     await message.answer(
         f"🎉 Serial saqlandi!\n"
-        f"🔑 Kodi: {series_code}\n"
+        f"📂 Kodi: {series_code}\n"
         f"📺 Jami qismlar: {total_episodes} ta"
     )
 
@@ -1202,7 +1203,7 @@ async def process_edit_movie_video(message: types.Message, state: FSMContext):
     code = data["code"]
     message_id = get_movie(code)
     description = get_movie_title(code) or ""
-    caption = f"🎬 {description}\n\n🔑 Kino kodi: {code}"
+    caption = f"{description}\n\n📂 Kino kodi: {code}"
 
     try:
         await bot.edit_message_media(
@@ -1265,7 +1266,7 @@ async def process_quality_description(message: types.Message, state: FSMContext)
     quality = data["quality"]
 
     message_id = get_movie_quality_message_id(code, quality)
-    new_caption = f"🎬 {message.text}\n\n🔑 Kino kodi: {code}\n🎞 Sifat: {quality}"
+    new_caption = f"{message.text}\n\n📂 Kino kodi: {code}\n🎞 Sifat: {quality}"
 
     try:
         await bot.edit_message_caption(chat_id=CHANNEL_ID, message_id=message_id, caption=new_caption)
@@ -1558,7 +1559,7 @@ async def process_edit_description(message: types.Message, state: FSMContext):
     content_type = data["content_type"]
 
     if content_type == "movie":
-        new_caption = f"🎬 {message.text}\n\n🔑 Kino kodi: {code}"
+        new_caption = f"{message.text}\n\n📂 Kino kodi: {code}"
         message_id = get_movie(code)
         try:
             await bot.edit_message_caption(
@@ -1720,7 +1721,7 @@ async def finalize_movie_upload(chat_id: int, state: FSMContext, poster_file_id:
     tavsif = data.get("description")
     quality = data.get("quality", "Standart")
 
-    caption = f"🎬 {tavsif}\n\n🔑 Kino kodi: {code}"
+    caption = f"{tavsif}\n\n📂 Kino kodi: {code}"
 
     try:
         sent_msg = await bot.send_video(
@@ -1894,7 +1895,7 @@ async def deliver_series_post(chat_id: int, code: str) -> bool:
     info = get_series_info(code)
     if info:
         description, photo_file_id = info
-        caption = f"{description}\n\n🔑 Serial kodi: {code}"
+        caption = f"{description}\n\n📂 Serial kodi: {code}"
         if photo_file_id:
             await bot.send_photo(chat_id, photo=photo_file_id, caption=caption, reply_markup=builder.as_markup())
         else:
@@ -1979,7 +1980,7 @@ async def deliver_movie(chat_id: int, code: str) -> bool:
 
         poster_file_id = get_movie_poster(code)
         title = get_movie_title(code) or ""
-        caption = f"🎬 {title}\n\n🔑 Kino kodi: {code}"
+        caption = f"{title}\n\n📂 Kino kodi: {code}"
 
         if poster_file_id:
             await bot.send_photo(chat_id, photo=poster_file_id, caption=caption, reply_markup=builder.as_markup())
@@ -2165,7 +2166,7 @@ async def inline_search(inline_query: types.InlineQuery):
         else:
             description_line = f"Yuklashlar: {downloads}"
 
-        caption = f"{title}\n\n🔑 Kodi: {code}"
+        caption = f"{title}\n\n📂 Kodi: {code}"
 
         if kind == "movie":
             poster_url = get_movie_poster_url(code)
@@ -2175,7 +2176,7 @@ async def inline_search(inline_query: types.InlineQuery):
                 description=description_line,
                 thumbnail_url=poster_url if poster_url else None,
                 input_message_content=types.InputTextMessageContent(
-                    message_text=f"🔑 Kod: {code}\n⏳ Kino yuborilmoqda..."
+                    message_text=f"📂 Kod: {code}\n⏳ Kino yuborilmoqda..."
                 )
             ))
         else:
@@ -2186,7 +2187,7 @@ async def inline_search(inline_query: types.InlineQuery):
                 description=description_line,
                 thumbnail_url=poster_url if poster_url else None,
                 input_message_content=types.InputTextMessageContent(
-                    message_text=f"🔑 Kod: {code}\n⏳ Serial yuborilmoqda..."
+                    message_text=f"📂 Kod: {code}\n⏳ Serial yuborilmoqda..."
                 )
             ))
 
