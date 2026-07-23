@@ -905,6 +905,37 @@ async def fixvideo_command(message: types.Message):
         await message.answer("⚠️ Xatolik yuz berdi, Railway loglarini tekshiring.")
 
 
+# 0.2.7. Admin uchun — barcha kino/serial/multfilmlarning kodi va nomi ro'yxati
+@dp.message(Command("list"))
+async def list_command(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    all_content = get_all_content()
+    if not all_content:
+        await message.answer("📭 Hozircha hech qanday kino yoki serial yuklanmagan.")
+        return
+
+    def sort_key(item):
+        code = item[0]
+        return int(code) if code.isdigit() else 0
+
+    sorted_content = sorted(all_content, key=sort_key)
+
+    lines = [f"📋 Jami: {len(sorted_content)} ta\n"]
+    for code, description, kind in sorted_content:
+        icon = "📺" if kind == "series" else "🎬"
+        first_line = next((line.strip() for line in description.split("\n") if line.strip()), "")
+        short_title = first_line[:50]
+        lines.append(f"{icon} {code} — {short_title}")
+
+    # Telegram xabar uzunligi cheklangani uchun, kerak bo'lsa bir nechta qismga bo'lib yuboramiz
+    full_text = "\n".join(lines)
+    chunk_size = 3500
+    for i in range(0, len(full_text), chunk_size):
+        await message.answer(full_text[i:i + chunk_size])
+
+
 # 0.2.6. Admin uchun — mavjud kanal postiga "Tomosha qilish" tugmasini qo'shish
 @dp.message(Command("addbutton"))
 async def addbutton_command(message: types.Message, state: FSMContext):
