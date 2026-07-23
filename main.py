@@ -621,14 +621,20 @@ def get_subscribe_keyboard():
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
 
-    # Namuna sifatida tasodifiy mashhur nom bilan to'ldiramiz (har safar boshqacha)
+    # Namuna sifatida tasodifiy mashhur nom bilan to'ldiramiz (har safar boshqacha).
+    # Nomni "franshiza" darajasiga qisqartiramiz — "/", "(" dan keyingi qismni va
+    # oxiridagi raqam/qism belgisini olib tashlaymiz, shunda bir nechta natija chiqadi.
     example_query = ""
     all_content = get_all_content()
     if all_content:
         _, sample_title, _ = random.choice(all_content)
         first_line = [line for line in sample_title.split("\n") if line.strip()]
         if first_line:
-            example_query = first_line[0][:30]
+            core = re.split(r"[/(]", first_line[0])[0].strip()
+            words = core.split()
+            while words and (words[-1].isdigit() or words[-1].upper() in {"I", "II", "III", "IV", "V"}):
+                words.pop()
+            example_query = (" ".join(words) or core)[:25]
 
     builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", switch_inline_query_current_chat=example_query))
     builder.add(types.InlineKeyboardButton(text="❓ Yordam", callback_data="menu:help"))
@@ -2175,7 +2181,7 @@ async def inline_search(inline_query: types.InlineQuery):
     if not query:
         # Hech narsa yozilmagan bo'lsa ham — barcha kino/seriallardan tasodifiy aralashtirib ko'rsatamiz
         all_content = get_all_content()
-        results = random.sample(all_content, min(15, len(all_content)))
+        results = random.sample(all_content, min(35, len(all_content)))
     else:
         results = search_content(query)[:20]
     items = []
