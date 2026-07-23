@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import random
 import logging
 import sqlite3
 import aiohttp
@@ -619,7 +620,17 @@ def get_subscribe_keyboard():
 
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", switch_inline_query_current_chat=""))
+
+    # Namuna sifatida tasodifiy mashhur nom bilan to'ldiramiz (har safar boshqacha)
+    example_query = ""
+    all_content = get_all_content()
+    if all_content:
+        _, sample_title, _ = random.choice(all_content)
+        first_line = [line for line in sample_title.split("\n") if line.strip()]
+        if first_line:
+            example_query = first_line[0][:30]
+
+    builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", switch_inline_query_current_chat=example_query))
     builder.add(types.InlineKeyboardButton(text="❓ Yordam", callback_data="menu:help"))
     builder.add(types.InlineKeyboardButton(text="🎬 Kino buyurtma berish", callback_data="menu:order"))
     builder.add(types.InlineKeyboardButton(text="👤 Profilim", callback_data="menu:profile"))
@@ -2162,9 +2173,9 @@ async def inline_search(inline_query: types.InlineQuery):
     query = inline_query.query.strip()
 
     if not query:
-        # Hech narsa yozilmagan bo'lsa ham — eng ko'p yuklangan kinolarni ko'rsatamiz
+        # Hech narsa yozilmagan bo'lsa ham — barcha kino/seriallardan tasodifiy aralashtirib ko'rsatamiz
         all_content = get_all_content()
-        results = sorted(all_content, key=lambda item: get_downloads(item[0]), reverse=True)[:15]
+        results = random.sample(all_content, min(15, len(all_content)))
     else:
         results = search_content(query)[:20]
     items = []
@@ -2173,10 +2184,10 @@ async def inline_search(inline_query: types.InlineQuery):
         downloads = get_downloads(code)
         lines = [line for line in title.split("\n") if line.strip()]
         short_title = lines[0][:60] if lines else title[:60]
-        extra_line = lines[1][:40] if len(lines) > 1 else ""
+        extra_line = lines[1][:30] if len(lines) > 1 else ""
 
         if extra_line:
-            description_line = f"Yuklashlar: {downloads} • {extra_line}"
+            description_line = f"{extra_line}\nYuklashlar: {downloads}"
         else:
             description_line = f"Yuklashlar: {downloads}"
 
