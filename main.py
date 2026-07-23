@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import logging
 import sqlite3
 import aiohttp
@@ -467,14 +468,20 @@ def get_all_content() -> list[tuple[str, str, str]]:
 
 
 def search_content(query: str) -> list[tuple[str, str, str]]:
-    """Nom bo'yicha qidiradi. [(code, title, 'movie'|'series'), ...] qaytaradi."""
-    like_query = f"%{query}%"
+    """Nom yoki kod bo'yicha qidiradi. [(code, title, 'movie'|'series'), ...] qaytaradi."""
+    # O'zbekcha apostrof belgilari har xil bo'lishi mumkin (', ', ', ʻ va h.k.) —
+    # ularni "_" (SQLite'da istalgan bitta belgiga mos keluvchi wildcard) bilan almashtiramiz
+    normalized_query = re.sub(r"[\u0027\u2018\u2019\u02BB\u02BC\u0060]", "_", query)
+    like_query = f"%{normalized_query}%"
+
     conn = sqlite3.connect(DB_PATH)
     movie_rows = conn.execute(
-        "SELECT code, description FROM movies WHERE description LIKE ?", (like_query,)
+        "SELECT code, description FROM movies WHERE description LIKE ? OR code = ?",
+        (like_query, query)
     ).fetchall()
     series_rows = conn.execute(
-        "SELECT series_code, description FROM series_info WHERE description LIKE ?", (like_query,)
+        "SELECT series_code, description FROM series_info WHERE description LIKE ? OR series_code = ?",
+        (like_query, query)
     ).fetchall()
     conn.close()
 
@@ -2166,10 +2173,10 @@ async def inline_search(inline_query: types.InlineQuery):
         downloads = get_downloads(code)
         lines = [line for line in title.split("\n") if line.strip()]
         short_title = lines[0][:60] if lines else title[:60]
-        extra_line = lines[1][:70] if len(lines) > 1 else ""
+        extra_line = lines[1][:40] if len(lines) > 1 else ""
 
         if extra_line:
-            description_line = f"{extra_line}\nYuklashlar: {downloads}"
+            description_line = f"Yuklashlar: {downloads} • {extra_line}"
         else:
             description_line = f"Yuklashlar: {downloads}"
 
