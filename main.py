@@ -619,7 +619,6 @@ def get_subscribe_keyboard():
 
 
 EXAMPLE_SEARCH_WORDS = [
-    "qasoskorlar",
     "multfilm",
     "ujas",
     "venom",
