@@ -2214,13 +2214,23 @@ async def fallback_handler(message: types.Message):
 @dp.inline_query()
 async def inline_search(inline_query: types.InlineQuery):
     query = inline_query.query.strip()
+    offset = inline_query.offset
+    page = int(offset) if offset.isdigit() else 0
 
     if not query:
         # Hech narsa yozilmagan bo'lsa ham — barcha kino/seriallardan tasodifiy aralashtirib ko'rsatamiz
         all_content = get_all_content()
-        results = random.sample(all_content, min(35, len(all_content)))
+        random.shuffle(all_content)
+        start = page * 50
+        end = start + 50
+        results = all_content[start:end]
+        next_offset = str(page + 1) if end < len(all_content) else ""
     else:
-        results = search_content(query)[:20]
+        all_results = search_content(query)
+        start = page * 20
+        end = start + 20
+        results = all_results[start:end]
+        next_offset = str(page + 1) if end < len(all_results) else ""
     items = []
 
     for code, title, kind in results:
@@ -2259,7 +2269,7 @@ async def inline_search(inline_query: types.InlineQuery):
                 )
             ))
 
-    await inline_query.answer(items, cache_time=5, is_personal=False)
+    await inline_query.answer(items, cache_time=5, is_personal=False, next_offset=next_offset)
 
 
 @dp.chosen_inline_result()
