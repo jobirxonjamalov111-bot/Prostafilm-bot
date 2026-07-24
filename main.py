@@ -622,18 +622,24 @@ def get_main_keyboard():
     builder = InlineKeyboardBuilder()
 
     # Namuna sifatida tasodifiy mashhur nom bilan to'ldiramiz (har safar boshqacha).
-    # Nomni "franshiza" darajasiga qisqartiramiz — "/", "(" dan keyingi qismni va
-    # oxiridagi raqam/qism belgisini olib tashlaymiz, shunda bir nechta natija chiqadi.
+    # Nomni "franshiza" darajasiga qisqartiramiz — "/", "(", ":", "-" kabi belgilardan
+    # keyingi qismni va oxiridagi raqam/qism belgisini olib tashlaymiz,
+    # shunda "Qasoskorlar 4: Intiho" -> "Qasoskorlar" bo'lib, barcha qismlari chiqadi.
     example_query = ""
     all_content = get_all_content()
     if all_content:
         _, sample_title, _ = random.choice(all_content)
         first_line = [line for line in sample_title.split("\n") if line.strip()]
         if first_line:
-            core = re.split(r"[/(]", first_line[0])[0].strip()
+            core = re.split(r"[/(:\-–]", first_line[0])[0].strip()
             words = core.split()
-            while words and (words[-1].isdigit() or words[-1].upper() in {"I", "II", "III", "IV", "V"}):
-                words.pop()
+            roman_numerals = {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}
+            while words:
+                last_word = words[-1].strip(".,:;-")
+                if last_word.isdigit() or last_word.upper() in roman_numerals:
+                    words.pop()
+                else:
+                    break
             example_query = (" ".join(words) or core)[:25]
 
     builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", switch_inline_query_current_chat=example_query))
