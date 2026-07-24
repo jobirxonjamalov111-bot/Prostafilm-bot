@@ -618,29 +618,22 @@ def get_subscribe_keyboard():
     return builder.as_markup()
 
 
+EXAMPLE_SEARCH_WORDS = [
+    "qasoskorlar",
+    "multfilm",
+    "ujas",
+    "venom",
+    "borsa kelmas",
+    "ajal rejasi",
+    "godzilla",
+]
+
+
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
 
-    # Namuna sifatida tasodifiy mashhur nom bilan to'ldiramiz (har safar boshqacha).
-    # Nomni "franshiza" darajasiga qisqartiramiz — "/", "(", ":", "-" kabi belgilardan
-    # keyingi qismni va oxiridagi raqam/qism belgisini olib tashlaymiz,
-    # shunda "Qasoskorlar 4: Intiho" -> "Qasoskorlar" bo'lib, barcha qismlari chiqadi.
-    example_query = ""
-    all_content = get_all_content()
-    if all_content:
-        _, sample_title, _ = random.choice(all_content)
-        first_line = [line for line in sample_title.split("\n") if line.strip()]
-        if first_line:
-            core = re.split(r"[/(:\-–]", first_line[0])[0].strip()
-            words = core.split()
-            roman_numerals = {"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"}
-            while words:
-                last_word = words[-1].strip(".,:;-")
-                if last_word.isdigit() or last_word.upper() in roman_numerals:
-                    words.pop()
-                else:
-                    break
-            example_query = (" ".join(words) or core)[:25]
+    # Namuna sifatida belgilangan ro'yxatdan tasodifiy so'z tanlaymiz (har safar boshqacha)
+    example_query = random.choice(EXAMPLE_SEARCH_WORDS)
 
     builder.add(types.InlineKeyboardButton(text="🔍 Kino qidirish", switch_inline_query_current_chat=example_query))
     builder.add(types.InlineKeyboardButton(text="❓ Yordam", callback_data="menu:help"))
