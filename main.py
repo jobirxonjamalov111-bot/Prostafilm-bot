@@ -626,7 +626,8 @@ EXAMPLE_SEARCH_WORDS = [
     "borsa kelmas",
     "ajal rejasi",
     "godzilla",
-]    "taksi",
+    "Taksi",
+]    
 
 
 def get_main_keyboard():
